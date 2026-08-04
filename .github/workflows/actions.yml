@@ -1,0 +1,17 @@
+name: actions.yml
+on: [push]
+jobs:
+  Golang-check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: CheckOut Code
+        uses: actions/checkout@v5
+
+      - name: Setup Golang
+        uses: actions/setup-go@v7
+
+      - name: Running go program
+        run: go run main.go
+
+
+
