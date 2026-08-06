@@ -22,6 +22,16 @@ func main() {
 		request(buscode)
 		c.JSON(200, gin.H{"message": "ok"})
 	})
+
+	router.GET("/trackxhr", func(c *gin.Context) {
+		buscode := c.DefaultQuery("buscode", "")
+		if buscode == "" {
+			log.Fatal("None Returned Query Parameter not passed")
+			return
+		}
+		ge_bus_route(buscode)
+		c.JSON(200, gin.H{"message": "ok"})
+	})
 	err := router.Run(":8080")
 	if err != nil {
 		log.Fatal(err)

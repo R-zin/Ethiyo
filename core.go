@@ -1,9 +1,13 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"net/http"
+
+	"github.com/chromedp/cdproto/network"
+	"github.com/chromedp/chromedp"
 	"github.com/gocolly/colly"
 )
 
@@ -11,7 +15,6 @@ func scrap(url string) {
 	c := colly.NewCollector()
 	c.OnHTML("body", func(e *colly.HTMLElement) {})
 }
-
 
 func request(BusCode string) {
 
@@ -23,11 +26,28 @@ func request(BusCode string) {
 	if err != nil {
 		log.Fatal(err)
 	}
-	fmt.Println(resp.Body.Read())
 	defer resp.Body.Close()
+}
 
-func ge_bus_route(Bus_url string) {
+func ge_bus_route(BusCode string) {
+	ctx, cancel := chromedp.NewContext(context.Background())
+	defer cancel()
+	if err := chromedp.Run(ctx, network.Enable()); err != nil {
+		log.Fatal(err)
+	}
+	chromedp.ListenTarget(ctx, func(ev interface{}) {
+		switch ev := ev.(type) {
+		case *network.EventRequestWillBeSent:
+			if ev.Type == network.ResourceTypeXHR || ev.Type == network.ResourceTypeFetch {
+				fmt.Println(ev.Request.URL)
 
-
+			}
+		}
+	})
+	err := chromedp.Run(ctx,
+		chromedp.Navigate(fmt.Sprintf("https://chalo.com/app/public-route/%s", BusCode)),
+		chromedp.WaitVisible("body"))
+	if err != nil {
+		log.Fatal(err)
 	}
 }
