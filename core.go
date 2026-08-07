@@ -32,7 +32,7 @@ func request(BusCode string) {
 func ge_bus_route(BusCode string) {
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],
 		chromedp.ExecPath("/Applications/Brave Browser.app/Contents/MacOS/Brave Browser"),
-		chromedp.Flag("headless", false), // Change to true if you don't want the browser window
+		chromedp.Flag("headless", true), // Change to true if you don't want the browser window
 	)
 	allocCtx, cancel := chromedp.NewExecAllocator(context.Background(), opts...)
 	defer cancel()
