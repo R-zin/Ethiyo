@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"regexp"
 
 	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/chromedp"
@@ -30,9 +31,11 @@ func request(BusCode string) {
 }
 
 func ge_bus_route(BusCode string) {
+	var sudha_sub string
+	re := regexp.MustCompile(`route-live-info/([^/]+)/([^?]+)`)
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],
 		chromedp.ExecPath("/Applications/Brave Browser.app/Contents/MacOS/Brave Browser"),
-		chromedp.Flag("headless", true), // Change to true if you don't want the browser window
+		chromedp.Flag("headless", true),
 	)
 	allocCtx, cancel := chromedp.NewExecAllocator(context.Background(), opts...)
 	defer cancel()
@@ -46,8 +49,9 @@ func ge_bus_route(BusCode string) {
 		switch ev := ev.(type) {
 		case *network.EventRequestWillBeSent:
 			if ev.Type == network.ResourceTypeXHR || ev.Type == network.ResourceTypeFetch {
-				fmt.Println(ev.Request.URL)
-
+				match := re.FindStringSubmatch(ev.Request.URL)
+				sudha_sub = match[1]
+				break
 			}
 		}
 	})
