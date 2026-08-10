@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -30,7 +31,8 @@ func request(BusCode string) {
 	defer resp.Body.Close()
 }
 
-func ge_bus_route(BusCode string) {
+func ge_bus_route(BusCode string) string {
+	sp_url := "https://chalo.com/app/api/vasudha/track/"
 	var sudha_sub string
 	re := regexp.MustCompile(`route-live-info/([^/]+)/([^?]+)`)
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],
@@ -50,15 +52,29 @@ func ge_bus_route(BusCode string) {
 		case *network.EventRequestWillBeSent:
 			if ev.Type == network.ResourceTypeXHR || ev.Type == network.ResourceTypeFetch {
 				match := re.FindStringSubmatch(ev.Request.URL)
-				sudha_sub = match[1]
-				break
+				if len(match) > 0 {
+					sudha_sub = match[0]
+					cancel()
+				}
 			}
 		}
 	})
 	err := chromedp.Run(ctx,
 		chromedp.Navigate(fmt.Sprintf("https://chalo.com/app/public-route/%s", BusCode)),
 		chromedp.WaitVisible("body"))
+	if err != nil && !errors.Is(err, context.Canceled) {
+		log.Fatal(err)
+	}
+	return sp_url + sudha_sub
+}
+
+func make_req(track_url string) {
+	res, err := http.Get(track_url)
 	if err != nil {
 		log.Fatal(err)
 	}
+	defer res.Body.Close()
+	fmt.Println(res.StatusCode)
+	fmt.Println(res.Body)
+
 }

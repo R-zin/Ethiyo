@@ -32,6 +32,13 @@ func main() {
 		ge_bus_route(buscode)
 		c.JSON(200, gin.H{"message": "ok"})
 	})
+
+	router.GET("/testroute", func(c *gin.Context) {
+		buscode := c.Query("buscode")
+		bus_url := ge_bus_route(buscode)
+		make_req(bus_url)
+	})
+
 	err := router.Run(":8080")
 	if err != nil {
 		log.Fatal(err)
