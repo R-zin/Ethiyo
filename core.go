@@ -31,9 +31,10 @@ func request(BusCode string) {
 	defer resp.Body.Close()
 }
 
-func ge_bus_route(BusCode string) string {
+func ge_bus_route(BusCode string) (string, string) {
 	sp_url := "https://chalo.com/app/api/vasudha/track/"
 	var sudha_sub string
+	var cook string
 	re := regexp.MustCompile(`route-live-info/([^/]+)/([^?]+)`)
 	opts := append(chromedp.DefaultExecAllocatorOptions[:],
 		chromedp.ExecPath("/Applications/Brave Browser.app/Contents/MacOS/Brave Browser"),
@@ -68,13 +69,19 @@ func ge_bus_route(BusCode string) string {
 	return sp_url + sudha_sub
 }
 
-func make_req(track_url string) {
-	res, err := http.Get(track_url)
+func makeReq(track_url string, cookie string) {
+	client := &http.Client{}
+	res, err := http.NewRequest("GET", track_url, nil)
+	res.Header.Set("User-Agent", "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/26.5.2 Safari/605.1.15")
+	res.Header.Set("Cookie", cookie)
+	resp, err := client.Do(res)
+
 	if err != nil {
 		log.Fatal(err)
 	}
-	defer res.Body.Close()
-	fmt.Println(res.StatusCode)
-	fmt.Println(res.Body)
+	defer resp.Body.Close()
+	fmt.Println(resp.Status)
+	fmt.Println(resp.Header)
+	fmt.Println(resp.Body)
 
 }
