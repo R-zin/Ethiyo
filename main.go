@@ -35,8 +35,8 @@ func main() {
 
 	router.GET("/testroute", func(c *gin.Context) {
 		buscode := c.Query("buscode")
-		bus_url := ge_bus_route(buscode)
-		makeReq(bus_url)
+		bus_url,cookie := ge_bus_route(buscode)
+		makeReq(bus_url, cookie)
 	})
 
 	err := router.Run(":8080")
