@@ -41,7 +41,7 @@ func getBusRoute(BusCode string) (string, string, error) {
         chromedp.ExecPath(
             "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
         ),
-        chromedp.Flag("headless", false),
+        chromedp.Flag("headless", true),
     )
 
     allocCtx, cancel := chromedp.NewExecAllocator(
@@ -106,7 +106,7 @@ func getBusRoute(BusCode string) (string, string, error) {
     case <-time.After(10 * time.Second):
         return "", "", fmt.Errorf("timed out waiting for API requests")
     }
-
+	fmt.Println(trackURL,routeURL)
     return trackURL, routeURL, nil
 }
 
