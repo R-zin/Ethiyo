@@ -29,13 +29,20 @@ func main() {
 			log.Fatal("None Returned Query Parameter not passed")
 			return
 		}
-		ge_bus_route(buscode)
-		c.JSON(200, gin.H{"message": "ok"})
+		res,cook,err := getBusRoute(buscode)
+		c.JSON(200, gin.H{"message": "ok",
+			"route": res,
+			"cookie": cook,
+			"error": err,
+		})
 	})
 
 	router.GET("/testroute", func(c *gin.Context) {
 		buscode := c.Query("buscode")
-		bus_url,cookie := ge_bus_route(buscode)
+		bus_url,cookie,err := getBusRoute(buscode)
+		if err != nil {
+			log.Fatal(err)
+		}
 		makeReq(bus_url, cookie)
 	})
 

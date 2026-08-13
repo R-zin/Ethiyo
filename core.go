@@ -2,20 +2,14 @@ package main
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log"
 	"net/http"
 	"regexp"
+	"time"
 	"github.com/chromedp/cdproto/network"
 	"github.com/chromedp/chromedp"
-	"github.com/gocolly/colly"
 )
-
-func scrap(url string) {
-	c := colly.NewCollector()
-	c.OnHTML("body", func(e *colly.HTMLElement) {})
-}
 
 func request(BusCode string) {
 
@@ -30,56 +24,90 @@ func request(BusCode string) {
 	defer resp.Body.Close()
 }
 
-func ge_bus_route(BusCode string) (string, string) {
-	sp_url := "https://chalo.com/app/api/vasudha/track/"
-	var sudha_sub string
-	
-	re := regexp.MustCompile(`route-live-info/([^/]+)/([^?]+)`)
-	opts := append(chromedp.DefaultExecAllocatorOptions[:],
-		chromedp.ExecPath("/Applications/Brave Browser.app/Contents/MacOS/Brave Browser"),
-		chromedp.Flag("headless", true),
-	)
-	allocCtx, cancel := chromedp.NewExecAllocator(context.Background(), opts...)
-	defer cancel()
+func getBusRoute(BusCode string) (string, string, error) {
+    var trackURL string
+    var routeURL string
 
-	ctx, cancel := chromedp.NewContext(allocCtx)
-	defer cancel()
-	if err := chromedp.Run(ctx, network.Enable()); err != nil {
-		log.Fatal(err)
-	}
-	chromedp.ListenTarget(ctx, func(ev interface{}) {
-		switch ev := ev.(type) {
-		case *network.EventRequestWillBeSent:
-			if ev.Type == network.ResourceTypeXHR || ev.Type == network.ResourceTypeFetch {
-				match := re.FindStringSubmatch(ev.Request.URL)
-				if len(match) > 0 {
-					sudha_sub = match[0]
-					cancel()
-				}
-			}
-		}
-	})
-	var cookies []*network.Cookie
-	err := chromedp.Run(ctx,
-		chromedp.Navigate(fmt.Sprintf("https://chalo.com/app/public-route/%s", BusCode)),
-		chromedp.WaitVisible("body"),
-		chromedp.ActionFunc(func(ctx context.Context) error {
-			var err error
-			cookies, err = network.GetCookies().Do(ctx)
-			return err
-		}),
-	)
-	if err != nil && !errors.Is(err, context.Canceled) {
-		log.Fatal(err)
-	}
-	for _,cookie := range cookies {
-		fmt.Println("Cookie Name:", cookie.Name)
-		fmt.Println("Cookie Value:", cookie.Value)
-	}
-	// Extract cookies from browser context
-	
-	
-	return sp_url + sudha_sub, ""
+    reTrack := regexp.MustCompile(
+        `https://chalo\.com/app/api/vasudha/track/route-live-info/[^?]+`,
+    )
+
+    reRoute := regexp.MustCompile(
+        `https://chalo\.com/app/api/scheduler_v4/v4/[^/]+/routedetailslive\?`,
+    )
+
+    opts := append(
+        chromedp.DefaultExecAllocatorOptions[:],
+        chromedp.ExecPath(
+            "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
+        ),
+        chromedp.Flag("headless", false),
+    )
+
+    allocCtx, cancel := chromedp.NewExecAllocator(
+        context.Background(),
+        opts...,
+    )
+    defer cancel()
+
+    ctx, cancel := chromedp.NewContext(allocCtx)
+    defer cancel()
+
+    if err := chromedp.Run(ctx, network.Enable()); err != nil {
+        return "", "", err
+    }
+
+    done := make(chan struct{})
+
+    chromedp.ListenTarget(ctx, func(ev interface{}) {
+        req, ok := ev.(*network.EventRequestWillBeSent)
+        if !ok {
+            return
+        }
+
+        if req.Type != network.ResourceTypeXHR &&
+            req.Type != network.ResourceTypeFetch {
+            return
+        }
+
+        if match := reTrack.FindString(req.Request.URL); match != "" {
+            trackURL = match
+        }
+
+        if match := reRoute.FindString(req.Request.URL); match != "" {
+            routeURL = req.Request.URL
+        }
+
+        if trackURL != "" && routeURL != "" {
+            select {
+            case <-done:
+            default:
+                close(done)
+            }
+        }
+    })
+
+    err := chromedp.Run(ctx,
+        chromedp.Navigate(
+            fmt.Sprintf(
+                "https://chalo.com/app/public-route/%s",
+                BusCode,
+            ),
+        ),
+        chromedp.WaitVisible("body"),
+    )
+
+    if err != nil {
+        return "", "", err
+    }
+
+    select {
+    case <-done:
+    case <-time.After(10 * time.Second):
+        return "", "", fmt.Errorf("timed out waiting for API requests")
+    }
+
+    return trackURL, routeURL, nil
 }
 
 func makeReq(track_url string, cookie string) {
