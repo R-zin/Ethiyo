@@ -24,6 +24,47 @@ func request(BusCode string) {
 	defer resp.Body.Close()
 }
 
+func get_path_code(BusCode string) {
+    var track_url string
+    reTrack := regexp.MustCompile(
+        `https://chalo\.com/app/api/vasudha/track/route-live-info/[^?]+`,
+    )
+    opts := append(
+        chromedp.DefaultExecAllocatorOptions[:],
+        chromedp.ExecPath(
+            "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
+        ),
+        chromedp.Flag("headless", false),
+    )
+    allocCtx, cancel := chromedp.NewExecAllocator(
+        context.Background(),
+        opts...,
+    )
+    defer cancel()
+    ctx, cancel := chromedp.NewContext(allocCtx)
+    defer cancel()
+
+
+    chromedp.ListenTarget(ctx,func (ev interface{}) {
+        req, ok := ev.(*network.EventRequestWillBeSent)
+        if !ok {
+            return
+        }
+        if req.Type != network.ResourceTypeXHR &&
+            req.Type != network.ResourceTypeFetch {
+            return
+        }
+         if match := reTrack.FindString(req.Request.URL); match != "" {
+            track_url = match
+        }
+
+    })
+
+
+
+
+}
+
 func getBusRoute(BusCode string) (string, string, error) {
     var trackURL string
     var routeURL string
@@ -41,7 +82,7 @@ func getBusRoute(BusCode string) (string, string, error) {
         chromedp.ExecPath(
             "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
         ),
-        chromedp.Flag("headless", true),
+        chromedp.Flag("headless", false),
     )
 
     allocCtx, cancel := chromedp.NewExecAllocator(
