@@ -20,7 +20,8 @@ func request(BusCode string) {
 	client := &http.Client{}
 	resp, err := client.Do(req)
 	if err != nil {
-		log.Fatal(err)
+		fmt.Println("%w",err)
+		return 
 	}
 	defer resp.Body.Close()
 }
@@ -109,7 +110,7 @@ func getBusRoute(BusCode string) (string, string, error) {
 		chromedp.ExecPath(
 			"/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
 		),
-		chromedp.Flag("headless", false),
+		chromedp.Flag("headless", true),
 	)
 
 	allocCtx, cancel := chromedp.NewExecAllocator(
