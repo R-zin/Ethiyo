@@ -109,7 +109,7 @@ func getBusRoute(BusCode string) (string, string, error) {
 		chromedp.ExecPath(
 			"/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
 		),
-		chromedp.Flag("headless", false),
+		chromedp.Flag("headless", true),
 	)
 
 	allocCtx, cancel := chromedp.NewExecAllocator(
