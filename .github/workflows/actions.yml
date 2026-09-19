@@ -1,24 +1,49 @@
-name: actions.yml
-on: [push]
+name: CI
+
+on:
+  push:
+    branches: [ main,new ]
+  pull_request:
+    branches: [ main ]
+
 jobs:
-  Golang-check:
+  build-and-test:
+    name: Build & Test
     runs-on: ubuntu-latest
     steps:
-      - name: CheckOut Code
-        uses: actions/checkout@v5
+      - name: Checkout Code
+        uses: actions/checkout@v4
 
-      - name: Setup Golang
-        uses: actions/setup-go@v7
+      - name: Setup Go
+        uses: actions/setup-go@v5
         with:
           go-version: '1.26'
           cache: true
+
+      - name: Verify Formatting
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "The following files are not formatted:"
+            echo "$unformatted"
+            exit 1
+          fi
+
       - name: Download Dependencies
         run: go mod download
-      - name: Testing Go
-        run: go test ./...
-      - name: Build
-        run: go build -v ./...
-      
 
+      - name: Go Vet
+        run: go vet ./...
 
+      - name: Install Chromium for Browser Tests
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y chromium-browser
 
+      - name: Run Tests with Race Detector
+        run: go test -v -race ./...
+
+      - name: Build Application
+        run: |
+          go build -v ./...
+          go build -v -o bin/ethiyo ./cmd/server
