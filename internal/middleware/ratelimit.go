@@ -20,16 +20,35 @@ type RateLimiter struct {
 	burst   float64 // max bucket capacity
 	clients map[string]*clientBucket
 	mu      sync.Mutex
+
+	// ttl is how long an idle client bucket is retained before eviction;
+	// cleanupInterval is how often the background sweep runs. Both guard the
+	// clients map against unbounded growth from churning client IPs.
+	ttl             time.Duration
+	cleanupInterval time.Duration
+	stopCleanup     chan struct{}
+	stopOnce        sync.Once
 }
 
 // NewRateLimiter creates a new RateLimiter.
 func NewRateLimiter(rps float64, burst int) *RateLimiter {
 	rl := &RateLimiter{
-		rate:    rps,
-		burst:   float64(burst),
-		clients: make(map[string]*clientBucket),
+		rate:            rps,
+		burst:           float64(burst),
+		clients:         make(map[string]*clientBucket),
+		ttl:             10 * time.Minute,
+		cleanupInterval: time.Minute,
+		stopCleanup:     make(chan struct{}),
 	}
+	go rl.cleanupLoop()
 	return rl
+}
+
+// Stop terminates the background cleanup goroutine. Safe to call multiple times.
+func (rl *RateLimiter) Stop() {
+	rl.stopOnce.Do(func() {
+		close(rl.stopCleanup)
+	})
 }
 
 // Middleware returns a Gin HandlerFunc applying rate limiting.
@@ -75,4 +94,30 @@ func (rl *RateLimiter) allow(ip string) bool {
 	}
 
 	return false
+}
+
+// cleanup evicts buckets that have been idle longer than ttl.
+func (rl *RateLimiter) cleanup() {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+
+	cutoff := time.Now().Add(-rl.ttl)
+	for ip, bucket := range rl.clients {
+		if bucket.lastCheck.Before(cutoff) {
+			delete(rl.clients, ip)
+		}
+	}
+}
+
+func (rl *RateLimiter) cleanupLoop() {
+	ticker := time.NewTicker(rl.cleanupInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-rl.stopCleanup:
+			return
+		case <-ticker.C:
+			rl.cleanup()
+		}
+	}
 }

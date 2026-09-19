@@ -105,3 +105,63 @@ func TestValidationErrors(t *testing.T) {
 		t.Errorf("expected error on BrowserMaxConcurrency <= 0")
 	}
 }
+
+func TestCORSOriginsParsedAndTrimmed(t *testing.T) {
+	t.Setenv("CORS_ALLOWED_ORIGINS", "https://a.example.com, https://b.example.com ,https://c.example.com")
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	want := []string{"https://a.example.com", "https://b.example.com", "https://c.example.com"}
+	if len(cfg.CORSAllowedOrigins) != len(want) {
+		t.Fatalf("expected %d origins, got %v", len(want), cfg.CORSAllowedOrigins)
+	}
+	for i, o := range want {
+		if cfg.CORSAllowedOrigins[i] != o {
+			t.Errorf("origin %d: expected %q, got %q", i, o, cfg.CORSAllowedOrigins[i])
+		}
+	}
+}
+
+func TestOAuthStateSecretRandomAcrossLoads(t *testing.T) {
+	_ = os.Unsetenv("OAUTH_STATE_SECRET")
+	c1, err := Load()
+	if err != nil {
+		t.Fatalf("Load 1: %v", err)
+	}
+	c2, err := Load()
+	if err != nil {
+		t.Fatalf("Load 2: %v", err)
+	}
+	if c1.OAuthStateSecret == c2.OAuthStateSecret {
+		t.Errorf("expected distinct random secrets across Load calls")
+	}
+}
+
+func TestInvalidEnvValuesFallBackToDefaults(t *testing.T) {
+	t.Setenv("PORT", "   ") // blank → default
+	t.Setenv("BROWSER_MAX_CONCURRENCY", "notanumber")
+	t.Setenv("RATE_LIMIT_RPS", "abc")
+	t.Setenv("REQUEST_TIMEOUT", "not-a-duration")
+	t.Setenv("BROWSER_HEADLESS", "maybe")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Port != "8080" {
+		t.Errorf("blank PORT should fall back to 8080, got %q", cfg.Port)
+	}
+	if cfg.BrowserMaxConcurrency != 4 {
+		t.Errorf("bad int should fall back to 4, got %d", cfg.BrowserMaxConcurrency)
+	}
+	if cfg.RateLimitRPS != 10.0 {
+		t.Errorf("bad float should fall back to 10, got %v", cfg.RateLimitRPS)
+	}
+	if cfg.RequestTimeout != 15*time.Second {
+		t.Errorf("bad duration should fall back to 15s, got %v", cfg.RequestTimeout)
+	}
+	if !cfg.BrowserHeadless {
+		t.Errorf("bad bool should fall back to true")
+	}
+}

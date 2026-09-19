@@ -4,6 +4,7 @@ import (
 	"errors"
 	"regexp"
 	"strings"
+	"time"
 )
 
 var (
@@ -29,10 +30,12 @@ func ValidateBusCode(busCode string) (string, error) {
 	return trimmed, nil
 }
 
-// BusTrackingInfo contains the live tracking URL for a given bus code.
+// BusTrackingInfo contains the live tracking URL for a given bus code, plus
+// the live position snapshot when available.
 type BusTrackingInfo struct {
-	BusCode     string `json:"bus_code"`
-	TrackingURL string `json:"tracking_url"`
+	BusCode     string       `json:"bus_code"`
+	TrackingURL string       `json:"tracking_url"`
+	Live        *BusLiveInfo `json:"live,omitempty"`
 }
 
 // BusRouteInfo contains the tracking URL and live route details URL discovered for a bus code.
@@ -40,4 +43,21 @@ type BusRouteInfo struct {
 	BusCode     string `json:"bus_code"`
 	TrackingURL string `json:"tracking_url"`
 	RouteURL    string `json:"route_url"`
+}
+
+// BusLiveInfo carries the live position and trip context for a bus,
+// decoded from Chalo's vehicle-tracking payload.
+type BusLiveInfo struct {
+	BusCode      string    `json:"bus_code"`
+	VehicleCode  string    `json:"vehicle_code,omitempty"`
+	Operator     string    `json:"operator,omitempty"`
+	RouteName    string    `json:"route_name,omitempty"`
+	Latitude     float64   `json:"latitude"`
+	Longitude    float64   `json:"longitude"`
+	Speed        float64   `json:"speed,omitempty"`
+	RecordedAt   time.Time `json:"recorded_at"`
+	NextStop     string    `json:"next_stop,omitempty"`
+	PreviousStop string    `json:"previous_stop,omitempty"`
+	LiveTracking bool      `json:"live_tracking"`
+	TrackingURL  string    `json:"tracking_url"`
 }

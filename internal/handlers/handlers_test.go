@@ -161,6 +161,171 @@ func TestV1TrackBusInvalidCode(t *testing.T) {
 	}
 }
 
+// TestV1TrackBusTrimsWhitespace pins that BusTrackingInfo carries the
+// validated (trimmed) bus code, not the raw path parameter.
+func TestV1TrackBusTrimsWhitespace(t *testing.T) {
+	svc := &mockChaloService{
+		getBusTrackingFunc: func(ctx context.Context, busCode string) (*models.BusTrackingInfo, error) {
+			return &models.BusTrackingInfo{BusCode: busCode, TrackingURL: "https://chalo.com/t/" + busCode}, nil
+		},
+	}
+	r := setupTestRouter(svc, nil)
+	// %20BUS500%20 decodes to " BUS500 " in the path segment.
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/bus/%20BUS500%20/track", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var res struct {
+		Data models.BusTrackingInfo `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &res); err != nil {
+		t.Fatalf("unmarshal: %v", err)
+	}
+	if res.Data.BusCode != "BUS500" {
+		t.Errorf("expected trimmed bus code BUS500, got %q", res.Data.BusCode)
+	}
+}
+
+func TestV1RouteAndURLSuccess(t *testing.T) {
+	r := setupTestRouter(&mockChaloService{}, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/bus/BUS500/route", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("route: expected 200, got %d", w.Code)
+	}
+	var routeRes struct {
+		Data models.BusRouteInfo `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &routeRes); err != nil {
+		t.Fatalf("route unmarshal: %v", err)
+	}
+	if routeRes.Data.TrackingURL == "" || routeRes.Data.RouteURL == "" {
+		t.Errorf("route response missing URLs: %+v", routeRes.Data)
+	}
+
+	req2 := httptest.NewRequest(http.MethodGet, "/api/v1/bus/BUS500/url", nil)
+	w2 := httptest.NewRecorder()
+	r.ServeHTTP(w2, req2)
+	if w2.Code != http.StatusOK {
+		t.Fatalf("url: expected 200, got %d", w2.Code)
+	}
+}
+
+func TestHandleErrorDefaultAndCanceled(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	r := gin.New()
+	r.GET("/boom", func(c *gin.Context) { HandleError(c, errors.New("mystery")) })
+	r.GET("/canceled", func(c *gin.Context) { HandleError(c, context.Canceled) })
+	r.GET("/nil", func(c *gin.Context) { HandleError(c, nil); c.Status(http.StatusOK) })
+
+	req := httptest.NewRequest(http.MethodGet, "/boom", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusInternalServerError {
+		t.Errorf("expected 500 for unknown error, got %d", w.Code)
+	}
+
+	req2 := httptest.NewRequest(http.MethodGet, "/canceled", nil)
+	w2 := httptest.NewRecorder()
+	r.ServeHTTP(w2, req2)
+	if w2.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for canceled request, got %d", w2.Code)
+	}
+
+	req3 := httptest.NewRequest(http.MethodGet, "/nil", nil)
+	w3 := httptest.NewRecorder()
+	r.ServeHTTP(w3, req3)
+	if w3.Code != http.StatusOK {
+		t.Errorf("expected nil error to be a no-op, got %d", w3.Code)
+	}
+}
+
+func TestHealthBrowserPresence(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	rWith := gin.New()
+	rWith.GET("/health", NewHealthHandler("/usr/bin/chrome").Check)
+	req := httptest.NewRequest(http.MethodGet, "/health", nil)
+	w := httptest.NewRecorder()
+	rWith.ServeHTTP(w, req)
+	var res map[string]any
+	_ = json.Unmarshal(w.Body.Bytes(), &res)
+	if res["browser"] != true {
+		t.Errorf("expected browser=true when path configured, got %v", res["browser"])
+	}
+
+	rWithout := gin.New()
+	rWithout.GET("/health", NewHealthHandler("").Check)
+	w2 := httptest.NewRecorder()
+	rWithout.ServeHTTP(w2, req)
+	var res2 map[string]any
+	_ = json.Unmarshal(w2.Body.Bytes(), &res2)
+	if res2["browser"] != false {
+		t.Errorf("expected browser=false when no browser found, got %v", res2["browser"])
+	}
+}
+
+func TestAuthCallbackExchangeFailure(t *testing.T) {
+	authSvc := &mockOAuthService{enabled: true, secret: "test-secret-123"}
+	r := setupTestRouter(&mockChaloService{}, authSvc)
+
+	state, err := auth.GenerateState("test-secret-123")
+	if err != nil {
+		t.Fatalf("GenerateState: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/auth/google/callback?code=bad-code&state="+state, nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500 for failed token exchange, got %d", w.Code)
+	}
+	var res models.ErrorResponse
+	_ = json.Unmarshal(w.Body.Bytes(), &res)
+	if res.Error.Code != "TOKEN_EXCHANGE_FAILED" {
+		t.Errorf("expected TOKEN_EXCHANGE_FAILED, got %s", res.Error.Code)
+	}
+}
+
+func TestAuthLoginDisabled(t *testing.T) {
+	r := setupTestRouter(&mockChaloService{}, &mockOAuthService{enabled: false})
+	req := httptest.NewRequest(http.MethodGet, "/auth/google/login", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503 when OAuth disabled, got %d", w.Code)
+	}
+}
+
+func TestAuthCallbackStateCookieMismatch(t *testing.T) {
+	authSvc := &mockOAuthService{enabled: true, secret: "test-secret-123"}
+	r := setupTestRouter(&mockChaloService{}, authSvc)
+
+	state, err := auth.GenerateState("test-secret-123")
+	if err != nil {
+		t.Fatalf("GenerateState: %v", err)
+	}
+
+	otherState, err := auth.GenerateState("test-secret-123")
+	if err != nil {
+		t.Fatalf("GenerateState: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/auth/google/callback?code=valid-code&state="+state, nil)
+	req.AddCookie(&http.Cookie{Name: oauthStateCookie, Value: otherState})
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for cookie/query state mismatch, got %d", w.Code)
+	}
+}
+
 func TestV1TrackBusNotFound(t *testing.T) {
 	svc := &mockChaloService{
 		getBusTrackingFunc: func(ctx context.Context, busCode string) (*models.BusTrackingInfo, error) {
