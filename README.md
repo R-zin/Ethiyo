@@ -335,6 +335,17 @@ make fmt-check   # Check code formatting in CI
 make clean       # Remove build and test artifacts
 ```
 
+### Continuous Integration
+
+GitHub Actions runs on pushes to `main` and `new`, and on pull requests targeting
+`main`. The CI workflow verifies module consistency, formatting, vet results,
+race-enabled tests, coverage, Staticcheck, and known Go vulnerabilities. It
+also builds Linux amd64/arm64 and Windows amd64 binaries.
+
+Coverage reports and platform-specific binaries are uploaded as workflow
+artifacts and retained for 14 days. Pull requests additionally run GitHub's
+dependency review against the proposed changes.
+
 ---
 
 ## Testing
