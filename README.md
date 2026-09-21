@@ -3,7 +3,7 @@
 
 A production-grade, resilient Go backend service for Chalo bus route discovery and real-time transit tracking.
 
-Ethiyo bridges client applications and the Chalo public transit platform. It uses automated Chromium-based browser orchestration (`chromedp`) and HTTP request interception to discover live bus tracking URLs and route schedules dynamically, exposing them through clean, versioned RESTful APIs with strict security, rate limiting, and observability.
+Ethiyo bridges client applications and the Chalo public transit platform. It resolves live bus positions directly from Chalo's vehicle-tracking API and uses automated Chromium-based browser orchestration (`chromedp`) with HTTP request interception to discover route schedules, exposing them through clean, versioned RESTful APIs with strict security, rate limiting, and observability.
 
 ---
 
@@ -11,18 +11,19 @@ Ethiyo bridges client applications and the Chalo public transit platform. It use
 
 Chalo (`chalo.com`) is a major public transit technology platform operating across multiple cities. While Chalo exposes public transit tracking via web interfaces, its backend APIs utilize dynamic tokens, city identifiers, and live session endpoints that are resolved through client-side browser execution.
 
-Ethiyo automates this discovery lifecycle:
-1. Accepts a transit bus code (e.g., `DL1PC0001`, `12345`, `route_500`).
-2. Runs a lightweight, headless browser worker to navigate to the route's public page.
-3. Intercepts backend XHR and Fetch network requests matching live tracking and scheduler endpoints.
-4. Returns structured JSON containing live tracking URLs and scheduler route details, or directly proxies live route telemetry.
+Ethiyo automates this lifecycle:
+1. Accepts a transit bus code (e.g., `KS602`, `DL1PC0001`, `route_500`).
+2. Resolves the bus's live GPS position directly from Chalo's vehicle-tracking API (`dashboard/chatbot/raw`) — no browser needed for the hot path.
+3. For route schedules, runs a lightweight headless browser worker to navigate to the route's public page and intercepts backend XHR/Fetch requests matching the scheduler endpoint.
+4. Returns structured JSON containing the live position snapshot, live tracking URL, and scheduler route details.
 5. Manages authentication, concurrency limits, timeouts, and error handling so clients receive deterministic, reliable responses.
 
 ---
 
 ## Features
 
-- **Automated Route Discovery**: Intercepts `route-live-info` and `routedetailslive` endpoints via headless browser events.
+- **Live GPS Tracking**: Fetches real-time bus positions (lat/lon, speed, next/previous stop, route name) directly from Chalo's `dashboard/chatbot/raw?vehicleNo=` endpoint — no headless browser required for the tracking hot path.
+- **Automated Route Discovery**: Intercepts `routedetailslive` (and legacy `route-live-info`) endpoints via headless browser events for scheduler/route data.
 - **Cross-Platform Browser Discovery**: Automatically locates Chrome, Chromium, Brave, or Microsoft Edge on Windows, macOS, and Linux without hardcoded paths.
 - **Strict Concurrency Control**: Built-in worker semaphore and connection pooling to prevent CPU/memory exhaustion and browser-spawn denial of service.
 - **Clean Architecture**: Separation of concerns across handlers, business logic, Chalo client, browser managers, OAuth, and middleware.
@@ -177,7 +178,7 @@ Checks server status and browser availability.
 ### 2. V1 Bus Transit APIs
 
 #### `GET /api/v1/bus/:buscode/track`
-Returns the discovered live tracking URL for the specified bus code.
+Returns the live position snapshot and tracking URL for the specified bus code, fetched directly from Chalo's vehicle-tracking API (no browser required). Includes real-time GPS coordinates, speed, route name, and next/previous stop when the bus is actively reporting.
 
 #### `GET /api/v1/bus/:buscode/route`
 Returns both the live tracking URL and the live scheduler route URL.
@@ -211,7 +212,7 @@ curl -X GET http://localhost:8080/health
 
 ### Live Bus Tracking (v1)
 ```bash
-curl -X GET http://localhost:8080/api/v1/bus/DL1PC0001/track
+curl -X GET http://localhost:8080/api/v1/bus/KS602/track
 ```
 
 ### Route Details Discovery (v1)
@@ -228,25 +229,43 @@ curl -X GET "http://localhost:8080/trackxhr?buscode=DL1PC0001"
 
 ## Example Responses
 
-### Success Response (`GET /api/v1/bus/DL1PC0001/track`)
+### Success Response (`GET /api/v1/bus/KS602/track`)
+Returns the live position snapshot when the bus is actively reporting GPS.
 ```json
 {
   "success": true,
   "data": {
-    "bus_code": "DL1PC0001",
-    "tracking_url": "https://chalo.com/app/api/vasudha/track/route-live-info/DL1PC0001"
+    "bus_code": "KS602",
+    "tracking_url": "https://chalo.com/app/api/dashboard/chatbot/raw?vehicleNo=KS602",
+    "live": {
+      "bus_code": "KS602",
+      "vehicle_code": "KL15A3159",
+      "operator": "KSRTC",
+      "route_name": "Kannur-Punalur",
+      "latitude": 11.205833,
+      "longitude": 75.811525,
+      "speed": 0,
+      "recorded_at": "2026-09-19T22:23:55+05:30",
+      "next_stop": "Cheruvannur Koyas",
+      "previous_stop": "Meenchanda Bypass",
+      "live_tracking": true,
+      "tracking_url": "https://chalo.com/app/api/dashboard/chatbot/raw?vehicleNo=KS602"
+    }
   }
 }
 ```
 
-### Route Details (`GET /api/v1/bus/DL1PC0001/route`)
+If the vehicle has no live data (offline or unknown), the endpoint returns `404 BUS_NOT_FOUND`.
+
+### Route Details (`GET /api/v1/bus/KS602/route`)
+Route discovery still uses the headless browser to intercept the scheduler endpoint.
 ```json
 {
   "success": true,
   "data": {
-    "bus_code": "DL1PC0001",
-    "tracking_url": "https://chalo.com/app/api/vasudha/track/route-live-info/DL1PC0001",
-    "route_url": "https://chalo.com/app/api/scheduler_v4/v4/delhi/routedetailslive?routeId=DL1PC0001"
+    "bus_code": "KS602",
+    "tracking_url": "https://chalo.com/app/api/dashboard/chatbot/raw?vehicleNo=KS602",
+    "route_url": "https://chalo.com/app/api/scheduler_v4/v4/pathanamthitta/routedetailslive?route_id=fwbQqYZf&day=saturday"
   }
 }
 ```
@@ -272,6 +291,20 @@ curl -X GET "http://localhost:8080/trackxhr?buscode=DL1PC0001"
   }
 }
 ```
+
+---
+
+## Live Data Source
+
+Ethiyo's `/track` flow reads live positions directly from Chalo's vehicle-tracking API rather than scraping a browser-emitted XHR.
+
+- **Endpoint**: `GET https://chalo.com/app/api/dashboard/chatbot/raw?vehicleNo=<bus_code>` (direct HTTP, no headless browser on the hot path).
+- **Why**: Chalo's public route pages no longer emit the legacy `vasudha/track/route-live-info` XHR that earlier versions intercepted. The `chatbot/raw` endpoint is what those pages now call for live data, keyed by the same bus code clients already supply.
+- **Payload**: terse JSON fields — `sessionData.data.currentInfo` carries `lt`/`ln` (lat/lon), `pSp` (speed), `tS` (epoch-millis timestamp); `nextStop`/`previousStop`/`routeDetails`/`gpsData` carry trip context. `internal/chalo/client.go:ParseLiveTracking` decodes this into `models.BusLiveInfo`.
+- **HTTP 202 quirk**: Chalo answers with `202 Accepted` for **both** known vehicles (full payload) and unknown/offline ones (`{"error":"gps data is not present..."}`). Status alone can't distinguish them, so the client returns the body for any non-error status and lets `ParseLiveTracking` classify (no position → `ErrBusNotFound` → HTTP 404). This behavior is pinned by tests.
+- **Freshness**: positions update at the operator's telemetry cadence (KSRTC ≈ 30s). `recorded_at` reflects Chalo's `tS` timestamp, not fetch time.
+
+Route *schedules* (`/route`) still use the headless browser to intercept `scheduler_v4/.../routedetailslive`, which remains browser-emitted. See [Limitations](#limitations).
 
 ---
 
@@ -399,7 +432,9 @@ Ethiyo/
 
 ## Limitations
 
-- **Chalo Frontend Layout**: If Chalo completely redesigns its web application and stops issuing requests to `vasudha/track/route-live-info` or `scheduler_v4/.../routedetailslive`, the regex patterns in `internal/chalo/regex.go` must be updated.
+- **Chalo API Contract**: Live tracking depends on Chalo's `dashboard/chatbot/raw?vehicleNo=` endpoint. Chalo answers it with HTTP 202 for **both** known and unknown vehicles (distinguished only by the response body), which `internal/chalo/client.go` handles explicitly. If Chalo changes this endpoint or its payload shape (`lt`/`ln`/`tS`/`pSp` fields), update `ParseLiveTracking`.
+- **GPS Reporting Cadence**: Positions update at the operator's telemetry cadence (KSRTC ≈ every 30s). A bus that stops reporting returns `404 BUS_NOT_FOUND`.
+- **Route Discovery Requires Browser**: The `/route` flow still needs the headless browser to intercept `scheduler_v4/.../routedetailslive`. If Chalo stops issuing that request, update the regex patterns in `internal/chalo/regex.go`.
 - **Headless Browser Overhead**: Headless browser automation requires approximately 50MB-100MB of RAM per active session. Ensure server sizing accounts for `BROWSER_MAX_CONCURRENCY`.
 
 ---

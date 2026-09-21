@@ -24,15 +24,18 @@ func CORS(allowedOrigins []string) gin.HandlerFunc {
 
 		if allowAll {
 			c.Header("Access-Control-Allow-Origin", "*")
+			// Note: "Access-Control-Allow-Credentials: true" is invalid with a
+			// wildcard origin and rejected by browsers, so it is only emitted
+			// for allowlisted origins below.
 		} else if origin != "" && originsMap[strings.ToLower(origin)] {
 			c.Header("Access-Control-Allow-Origin", origin)
 			c.Header("Vary", "Origin")
+			c.Header("Access-Control-Allow-Credentials", "true")
 		}
 
 		c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS")
 		c.Header("Access-Control-Allow-Headers", "Origin, Content-Type, Accept, Authorization, X-Request-ID")
 		c.Header("Access-Control-Expose-Headers", "X-Request-ID, Content-Length")
-		c.Header("Access-Control-Allow-Credentials", "true")
 
 		if c.Request.Method == http.MethodOptions {
 			c.AbortWithStatus(http.StatusNoContent)

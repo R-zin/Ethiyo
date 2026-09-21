@@ -31,31 +31,49 @@ func NewService(client *Client, scraper *Scraper) *ChaloService {
 	}
 }
 
-// GetTrackingURL discovers and returns the live tracking URL for a bus code.
+// GetTrackingURL returns Chalo's live-tracking URL for a bus code. This is a
+// deterministic API endpoint (no browser discovery required); existence is
+// confirmed by a lightweight fetch, so an unknown vehicle surfaces as
+// ErrBusNotFound rather than a broken URL.
 func (s *ChaloService) GetTrackingURL(ctx context.Context, busCode string) (string, error) {
 	validCode, err := models.ValidateBusCode(busCode)
 	if err != nil {
 		return "", err
 	}
 
-	slog.InfoContext(ctx, "discovering tracking url", "bus_code", validCode)
-	trackURL, err := s.scraper.DiscoverTrackURL(ctx, validCode)
+	slog.InfoContext(ctx, "resolving live tracking url", "bus_code", validCode)
+	_, trackURL, err := s.client.FetchLiveTracking(ctx, validCode)
 	if err != nil {
-		slog.ErrorContext(ctx, "failed to discover tracking url", "bus_code", validCode, "error", err)
+		slog.ErrorContext(ctx, "failed to resolve live tracking url", "bus_code", validCode, "error", err)
 		return "", err
 	}
 	return trackURL, nil
 }
 
-// GetBusTracking returns a structured BusTrackingInfo model.
+// GetBusTracking returns the live position and trip context for a bus.
 func (s *ChaloService) GetBusTracking(ctx context.Context, busCode string) (*models.BusTrackingInfo, error) {
-	trackURL, err := s.GetTrackingURL(ctx, busCode)
+	validCode, err := models.ValidateBusCode(busCode)
 	if err != nil {
 		return nil, err
 	}
+
+	slog.InfoContext(ctx, "fetching live tracking", "bus_code", validCode)
+	body, trackURL, err := s.client.FetchLiveTracking(ctx, validCode)
+	if err != nil {
+		slog.ErrorContext(ctx, "failed to fetch live tracking", "bus_code", validCode, "error", err)
+		return nil, err
+	}
+
+	live, err := ParseLiveTracking(validCode, trackURL, body)
+	if err != nil {
+		slog.ErrorContext(ctx, "failed to parse live tracking", "bus_code", validCode, "error", err)
+		return nil, err
+	}
+
 	return &models.BusTrackingInfo{
-		BusCode:     busCode,
-		TrackingURL: trackURL,
+		BusCode:     validCode,
+		TrackingURL: live.TrackingURL,
+		Live:        live,
 	}, nil
 }
 

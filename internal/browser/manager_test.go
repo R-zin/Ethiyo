@@ -2,7 +2,9 @@ package browser
 
 import (
 	"context"
+	"errors"
 	"os"
+	"sync"
 	"testing"
 	"time"
 )
@@ -81,4 +83,64 @@ func TestManagerConcurrencyLimit(t *testing.T) {
 		t.Fatalf("unexpected error acquiring sess3 after release: %v", err)
 	}
 	sess3.Cancel()
+}
+
+func TestManagerRejectsInvalidTimeout(t *testing.T) {
+	mgr := NewManager("", true, 5*time.Second, 1)
+	_, err := mgr.AcquireSession(context.Background(), 0)
+	if !errors.Is(err, ErrInvalidTimeout) {
+		t.Fatalf("expected ErrInvalidTimeout for zero timeout, got %v", err)
+	}
+	_, err = mgr.AcquireSession(context.Background(), -time.Second)
+	if !errors.Is(err, ErrInvalidTimeout) {
+		t.Fatalf("expected ErrInvalidTimeout for negative timeout, got %v", err)
+	}
+}
+
+func TestAcquireSessionCallerContextCanceled(t *testing.T) {
+	mgr := NewManager("", true, 5*time.Second, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := mgr.AcquireSession(ctx, time.Second)
+	if err == nil {
+		t.Fatalf("expected error acquiring with canceled context")
+	}
+}
+
+// TestSetExecPathConcurrent exercises the data race between AcquireSession
+// (which reads execPath) and SetExecPath (which writes it) under -race.
+func TestSetExecPathConcurrent(t *testing.T) {
+	mgr := NewManager("", true, 5*time.Second, 4)
+	var wg sync.WaitGroup
+	for i := 0; i < 8; i++ {
+		wg.Add(2)
+		go func() {
+			defer wg.Done()
+			mgr.SetExecPath("/tmp/chrome")
+		}()
+		go func() {
+			defer wg.Done()
+			sess, err := mgr.AcquireSession(context.Background(), 50*time.Millisecond)
+			if err == nil {
+				sess.Cancel()
+			}
+		}()
+	}
+	wg.Wait()
+}
+
+func TestAcquireAndReleaseCycle(t *testing.T) {
+	mgr := NewManager("", true, 5*time.Second, 1)
+	sess, err := mgr.AcquireSession(context.Background(), time.Second)
+	if err != nil {
+		t.Fatalf("acquire: %v", err)
+	}
+	sess.Cancel()
+
+	// Slot must be immediately re-acquirable after release.
+	sess2, err := mgr.AcquireSession(context.Background(), time.Second)
+	if err != nil {
+		t.Fatalf("re-acquire after release: %v", err)
+	}
+	sess2.Cancel()
 }

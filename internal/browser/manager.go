@@ -14,10 +14,15 @@ import (
 var (
 	// ErrConcurrencyLimitReached is returned if the browser worker pool is saturated and context times out.
 	ErrConcurrencyLimitReached = errors.New("browser concurrency limit reached, operation timed out waiting for worker")
+
+	// ErrInvalidTimeout is returned when a non-positive timeout is supplied for an operation
+	// while the manager has no usable default configured.
+	ErrInvalidTimeout = errors.New("timeout must be positive")
 )
 
 // Manager coordinates chromedp browser execution and enforces concurrency limits.
 type Manager struct {
+	mu             sync.RWMutex // guards execPath
 	execPath       string
 	headless       bool
 	defaultTimeout time.Duration
@@ -47,7 +52,13 @@ type ExecSession struct {
 // The caller MUST call session.Cancel() when done to release resources and the concurrency slot.
 func (m *Manager) AcquireSession(parentCtx context.Context, timeout time.Duration) (*ExecSession, error) {
 	if timeout <= 0 {
-		timeout = m.defaultTimeout
+		return nil, ErrInvalidTimeout
+	}
+
+	// Fast path: an already-canceled caller context fails immediately rather
+	// than racing a free semaphore slot in the select below.
+	if err := parentCtx.Err(); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrConcurrencyLimitReached, err)
 	}
 
 	// 1. Acquire concurrency token
@@ -67,8 +78,8 @@ func (m *Manager) AcquireSession(parentCtx context.Context, timeout time.Duratio
 		chromedp.Flag("mute-audio", true),
 	)
 
-	if m.execPath != "" {
-		opts = append(opts, chromedp.ExecPath(m.execPath))
+	if p := m.ExecPath(); p != "" {
+		opts = append(opts, chromedp.ExecPath(p))
 	}
 
 	allocCtx, cancelAlloc := chromedp.NewExecAllocator(parentCtx, opts...)
@@ -97,11 +108,15 @@ func (m *Manager) AcquireSession(parentCtx context.Context, timeout time.Duratio
 
 // ExecPath returns the configured browser executable path.
 func (m *Manager) ExecPath() string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 	return m.execPath
 }
 
 // SetExecPath updates the executable path (e.g. after dynamic discovery).
 func (m *Manager) SetExecPath(path string) {
+	m.mu.Lock()
 	m.execPath = path
+	m.mu.Unlock()
 	slog.Info("browser executable configured", "path", path)
 }

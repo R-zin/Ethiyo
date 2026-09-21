@@ -47,3 +47,12 @@ func TestValidateBusCode(t *testing.T) {
 		})
 	}
 }
+
+func TestValidateBusCodeBoundaryLengths(t *testing.T) {
+	if _, err := ValidateBusCode(strings.Repeat("a", 64)); err != nil {
+		t.Errorf("64-char code should be valid: %v", err)
+	}
+	if _, err := ValidateBusCode(strings.Repeat("a", 65)); !errors.Is(err, ErrInvalidBusCodeFormat) {
+		t.Errorf("65-char code should be invalid, got %v", err)
+	}
+}
