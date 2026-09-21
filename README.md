@@ -1,4 +1,5 @@
 # Ethiyo
+[![CI](https://github.com/R-zin/Ethiyo/actions/workflows/actions.yml/badge.svg)](https://github.com/R-zin/Ethiyo/actions/workflows/actions.yml)
 
 A production-grade, resilient Go backend service for Chalo bus route discovery and real-time transit tracking.
 
