@@ -14,6 +14,8 @@ type clientBucket struct {
 	lastCheck time.Time
 }
 
+const defaultMaxClients = 10000
+
 // RateLimiter manages token bucket rate limits per client IP.
 type RateLimiter struct {
 	rate    float64 // tokens per second
@@ -28,6 +30,7 @@ type RateLimiter struct {
 	cleanupInterval time.Duration
 	stopCleanup     chan struct{}
 	stopOnce        sync.Once
+	maxClients      int
 }
 
 // NewRateLimiter creates a new RateLimiter.
@@ -39,6 +42,7 @@ func NewRateLimiter(rps float64, burst int) *RateLimiter {
 		ttl:             10 * time.Minute,
 		cleanupInterval: time.Minute,
 		stopCleanup:     make(chan struct{}),
+		maxClients:      defaultMaxClients,
 	}
 	go rl.cleanupLoop()
 	return rl
@@ -73,6 +77,9 @@ func (rl *RateLimiter) allow(ip string) bool {
 	now := time.Now()
 	bucket, exists := rl.clients[ip]
 	if !exists {
+		if len(rl.clients) >= rl.maxClients {
+			return false
+		}
 		rl.clients[ip] = &clientBucket{
 			tokens:    rl.burst - 1,
 			lastCheck: now,

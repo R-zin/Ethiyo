@@ -281,6 +281,7 @@ func TestAuthCallbackExchangeFailure(t *testing.T) {
 	}
 
 	req := httptest.NewRequest(http.MethodGet, "/auth/google/callback?code=bad-code&state="+state, nil)
+	req.AddCookie(&http.Cookie{Name: oauthStateCookie, Value: state})
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 	if w.Code != http.StatusInternalServerError {
@@ -524,5 +525,62 @@ func TestAuthLoginAndCallback(t *testing.T) {
 
 	if wGood.Code != http.StatusOK {
 		t.Fatalf("expected 200 for valid callback, got %d. Body: %s", wGood.Code, wGood.Body.String())
+	}
+
+	// Test Callback with valid state but MISSING cookie (should be rejected for CSRF)
+	reqNoCookie := httptest.NewRequest(http.MethodGet, "/auth/google/callback?code=valid-code&state="+stateCookie, nil)
+	wNoCookie := httptest.NewRecorder()
+	r.ServeHTTP(wNoCookie, reqNoCookie)
+
+	if wNoCookie.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 when oauth cookie is missing, got %d", wNoCookie.Code)
+	}
+
+	// Test Callback with mismatched cookie
+	reqMismatch := httptest.NewRequest(http.MethodGet, "/auth/google/callback?code=valid-code&state="+stateCookie, nil)
+	reqMismatch.AddCookie(&http.Cookie{Name: oauthStateCookie, Value: "different-cookie-state"})
+	wMismatch := httptest.NewRecorder()
+	r.ServeHTTP(wMismatch, reqMismatch)
+
+	if wMismatch.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 on cookie state mismatch, got %d", wMismatch.Code)
+	}
+}
+
+func TestV1RouteDetails(t *testing.T) {
+	r := setupTestRouter(&mockChaloService{}, nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/bus/DL1PC0001/route", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+
+	var res models.SuccessResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &res); err != nil {
+		t.Fatalf("failed to unmarshal response: %v", err)
+	}
+	if !res.Success {
+		t.Errorf("expected success true")
+	}
+}
+
+func TestV1GetURL(t *testing.T) {
+	r := setupTestRouter(&mockChaloService{}, nil)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/bus/DL1PC0001/url", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+
+	var res models.SuccessResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &res); err != nil {
+		t.Fatalf("failed to unmarshal response: %v", err)
+	}
+	if !res.Success {
+		t.Errorf("expected success true")
 	}
 }

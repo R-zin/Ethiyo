@@ -65,6 +65,7 @@ func New(cfg *config.Config) (*Server, error) {
 
 	// 4. Setup Gin engine with middleware
 	engine := gin.New()
+	_ = engine.SetTrustedProxies(nil)
 	rateLimiter := middleware.NewRateLimiter(cfg.RateLimitRPS, cfg.RateLimitBurst)
 
 	engine.Use(

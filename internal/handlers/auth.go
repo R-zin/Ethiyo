@@ -90,12 +90,11 @@ func (h *AuthHandler) Callback(c *gin.Context) {
 		return
 	}
 
-	// 2. Verify state matches client's state cookie if present
-	if cookieState, err := c.Cookie(oauthStateCookie); err == nil && cookieState != "" {
-		if cookieState != state {
-			c.JSON(http.StatusBadRequest, models.NewErrorResponse("INVALID_OAUTH_STATE", "oauth state mismatch"))
-			return
-		}
+	// 2. Verify state matches client's state cookie (mandatory for CSRF prevention)
+	cookieState, err := c.Cookie(oauthStateCookie)
+	if err != nil || cookieState == "" || cookieState != state {
+		c.JSON(http.StatusBadRequest, models.NewErrorResponse("INVALID_OAUTH_STATE", "oauth state cookie missing or mismatch"))
+		return
 	}
 
 	// Clear the state cookie

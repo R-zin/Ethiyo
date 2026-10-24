@@ -61,7 +61,7 @@ func TestRecoveryMiddleware(t *testing.T) {
 	if w.Code != http.StatusInternalServerError {
 		t.Fatalf("expected 500 on panic, got %d", w.Code)
 	}
-	if !contains(w.Body.String(), "INTERNAL_SERVER_ERROR") {
+	if !strings.Contains(w.Body.String(), "INTERNAL_SERVER_ERROR") {
 		t.Errorf("expected structured JSON error, got: %s", w.Body.String())
 	}
 }
@@ -104,6 +104,9 @@ func TestCORSMiddleware(t *testing.T) {
 	if wOpt.Header().Get("Access-Control-Allow-Origin") != "https://example.com" {
 		t.Errorf("expected allowed origin, got: %s", wOpt.Header().Get("Access-Control-Allow-Origin"))
 	}
+	if wOpt.Header().Get("Access-Control-Allow-Credentials") != "true" {
+		t.Errorf("expected Access-Control-Allow-Credentials 'true' for explicit origin")
+	}
 
 	// Disallowed origin
 	reqBad := httptest.NewRequest(http.MethodGet, "/test", nil)
@@ -113,6 +116,25 @@ func TestCORSMiddleware(t *testing.T) {
 
 	if wBad.Header().Get("Access-Control-Allow-Origin") == "https://evil.com" {
 		t.Errorf("disallowed origin received CORS allow header")
+	}
+
+	// Wildcard origin: Access-Control-Allow-Credentials must NOT be true
+	rWild := gin.New()
+	rWild.Use(CORS([]string{"*"}))
+	rWild.GET("/test", func(c *gin.Context) {
+		c.Status(http.StatusOK)
+	})
+
+	reqWild := httptest.NewRequest(http.MethodGet, "/test", nil)
+	reqWild.Header.Set("Origin", "https://anything.com")
+	wWild := httptest.NewRecorder()
+	rWild.ServeHTTP(wWild, reqWild)
+
+	if wWild.Header().Get("Access-Control-Allow-Origin") != "*" {
+		t.Errorf("expected * origin, got: %s", wWild.Header().Get("Access-Control-Allow-Origin"))
+	}
+	if wWild.Header().Get("Access-Control-Allow-Credentials") == "true" {
+		t.Errorf("Access-Control-Allow-Credentials must NOT be true when Allow-Origin is *")
 	}
 }
 
@@ -305,6 +327,7 @@ func TestRequestSizeLimit(t *testing.T) {
 
 func TestRateLimiterConcurrent(t *testing.T) {
 	rl := NewRateLimiter(1000, 64)
+	defer rl.Stop()
 	done := make(chan struct{})
 	for i := 0; i < 32; i++ {
 		go func(i int) {
@@ -319,15 +342,18 @@ func TestRateLimiterConcurrent(t *testing.T) {
 	}
 }
 
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(s) > 0 && len(substr) > 0 && searchSubstring(s, substr))
-}
+func TestRateLimiterMaxCapacity(t *testing.T) {
+	limiter := NewRateLimiter(10.0, 10)
+	defer limiter.Stop()
+	limiter.maxClients = 3
 
-func searchSubstring(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
+	// Fill to capacity
+	if !limiter.allow("1.1.1.1") || !limiter.allow("2.2.2.2") || !limiter.allow("3.3.3.3") {
+		t.Fatalf("expected initial clients to be allowed")
 	}
-	return false
+
+	// 4th client rejected because maxClients is reached
+	if limiter.allow("4.4.4.4") {
+		t.Errorf("expected 4th client to be rejected when capacity is full")
+	}
 }

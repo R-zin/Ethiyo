@@ -75,8 +75,8 @@ func (c *Client) FetchPublicRoute(ctx context.Context, busCode string) (int, err
 	}
 	defer resp.Body.Close()
 
-	// Drain up to 1KB to enable connection reuse
-	_, _ = io.CopyN(io.Discard, resp.Body, 1024)
+	// Drain response body up to 64KB to enable connection reuse
+	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 64*1024))
 
 	return resp.StatusCode, nil
 }

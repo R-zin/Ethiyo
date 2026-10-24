@@ -480,3 +480,49 @@ func TestFetchRouteDetailsNotFound(t *testing.T) {
 		t.Errorf("expected ErrBusNotFound, got %v", err)
 	}
 }
+
+func TestChaloService(t *testing.T) {
+	client := NewClient("https://chalo.com", 5*time.Second)
+	client.SetHTTPClient(&mockHTTPClient{
+		doFunc: func(req *http.Request) (*http.Response, error) {
+			if req.URL.String() == "https://chalo.com/app/public-route/12345" {
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Body:       io.NopCloser(bytes.NewBufferString("ok")),
+				}, nil
+			}
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(bytes.NewBufferString(`{"status":"active"}`)),
+			}, nil
+		},
+	})
+
+	svc := NewService(client, nil)
+
+	// Test bus code validation rejection across methods
+	if _, err := svc.GetTrackingURL(context.Background(), "invalid$$code"); err == nil {
+		t.Errorf("expected validation error on GetTrackingURL")
+	}
+	if _, err := svc.GetBusTracking(context.Background(), ""); err == nil {
+		t.Errorf("expected validation error on GetBusTracking")
+	}
+	if _, err := svc.GetBusRoute(context.Background(), "bad/code"); err == nil {
+		t.Errorf("expected validation error on GetBusRoute")
+	}
+	if _, err := svc.FetchPublicRoute(context.Background(), ""); err == nil {
+		t.Errorf("expected validation error on FetchPublicRoute")
+	}
+
+	// Test valid FetchPublicRoute call
+	statusCode, err := svc.FetchPublicRoute(context.Background(), "12345")
+	if err != nil || statusCode != http.StatusOK {
+		t.Errorf("expected 200 from FetchPublicRoute, got status %d, err %v", statusCode, err)
+	}
+
+	// Test valid FetchRouteDetails call
+	data, err := svc.FetchRouteDetails(context.Background(), "https://chalo.com/app/api/route/test")
+	if err != nil || string(data) != `{"status":"active"}` {
+		t.Errorf("expected valid data from FetchRouteDetails, got %s, err %v", string(data), err)
+	}
+}

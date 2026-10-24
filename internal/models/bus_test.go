@@ -1,6 +1,7 @@
 package models
 
 import (
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -54,5 +55,35 @@ func TestValidateBusCodeBoundaryLengths(t *testing.T) {
 	}
 	if _, err := ValidateBusCode(strings.Repeat("a", 65)); !errors.Is(err, ErrInvalidBusCodeFormat) {
 		t.Errorf("65-char code should be invalid, got %v", err)
+	}
+}
+
+func TestResponseSerialization(t *testing.T) {
+	errResp := NewErrorResponse("TEST_CODE", "test error message")
+	if errResp.Success {
+		t.Errorf("expected Success to be false")
+	}
+
+	data, err := json.Marshal(errResp)
+	if err != nil {
+		t.Fatalf("failed to marshal ErrorResponse: %v", err)
+	}
+
+	jsonStr := string(data)
+	if !strings.Contains(jsonStr, `"success":false`) {
+		t.Errorf("expected json to contain explicit '\"success\":false', got: %s", jsonStr)
+	}
+
+	succResp := NewSuccessResponse(map[string]string{"foo": "bar"})
+	if !succResp.Success {
+		t.Errorf("expected Success to be true")
+	}
+
+	succData, err := json.Marshal(succResp)
+	if err != nil {
+		t.Fatalf("failed to marshal SuccessResponse: %v", err)
+	}
+	if !strings.Contains(string(succData), `"success":true`) {
+		t.Errorf("expected json to contain '\"success\":true', got: %s", string(succData))
 	}
 }
