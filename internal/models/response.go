@@ -8,7 +8,7 @@ type ErrorDetail struct {
 
 // ErrorResponse is the standardized error response envelope.
 type ErrorResponse struct {
-	Success bool        `json:"success,omitempty"`
+	Success bool        `json:"success"`
 	Error   ErrorDetail `json:"error"`
 }
 
