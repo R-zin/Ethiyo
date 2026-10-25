@@ -128,7 +128,15 @@ jobs:
           mkdir -p bin
           go build -o bin/server ./cmd/server
 
+      - name: Start mock Chalo upstream server
+        run: |
+          node frontend/mock-chalo.cjs &
+          echo "MOCK_PID=$!" >> $GITHUB_ENV
+          sleep 1
+
       - name: Start backend server
+        env:
+          CHALO_BASE_URL: http://localhost:9099
         run: |
           ./bin/server > backend.log 2>&1 &
           echo "BACKEND_PID=$!" >> $GITHUB_ENV
@@ -185,6 +193,7 @@ jobs:
         run: |
           kill -9 $BACKEND_PID 2>/dev/null || true
           kill -9 $FRONTEND_PID 2>/dev/null || true
+          kill -9 $MOCK_PID 2>/dev/null || true
 
   build:
     name: Build (${{ matrix.goos }}/${{ matrix.goarch }})

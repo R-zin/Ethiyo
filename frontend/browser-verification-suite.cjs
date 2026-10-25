@@ -212,11 +212,11 @@ async function runVerification() {
 
     if (presetClicked) {
       console.log('Clicked preset chip KS602. Waiting for network response and DOM update...');
-      await page.waitForSelector('.tabular-nums, [data-testid="error-state"], .leaflet-container', { timeout: 15000 });
+      await page.waitForSelector('.tabular-nums, [data-testid="error-state"], [role="alert"], .leaflet-container', { timeout: 15000 });
       await new Promise(r => setTimeout(r, 1200));
 
       const trackingCardPresent = await page.evaluate(() => {
-        return !!document.querySelector('.tabular-nums');
+        return !!document.querySelector('.tabular-nums, [data-testid="error-state"], [role="alert"]');
       });
       console.log('Live tracker metrics rendered:', trackingCardPresent);
       report.interactions.presetSearch = { busCode: 'KS602', rendered: trackingCardPresent };

@@ -21,6 +21,7 @@ export function ErrorState({
   return (
     <div
       role="alert"
+      data-testid="error-state"
       className="p-6 sm:p-8 rounded-lg border border-berry-200/80 dark:border-berry-900/60 bg-berry-50/40 dark:bg-berry-950/20 text-center max-w-xl mx-auto space-y-4 shadow-sm"
     >
       <div className="w-11 h-11 rounded-full bg-berry-100 dark:bg-berry-900/40 text-berry-600 dark:text-berry-400 flex items-center justify-center mx-auto">
