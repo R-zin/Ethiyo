@@ -33,3 +33,15 @@ Thumbs.db
 
 # Dependency directories
 vendor/
+node_modules/
+frontend/node_modules/
+
+# Frontend build & E2E artifacts
+frontend/dist/
+frontend/screenshots/
+e2e-screenshots/
+
+# Agent and CLI local state
+.agents/
+.claude/
+skills-lock.json
