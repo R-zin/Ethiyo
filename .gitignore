@@ -39,6 +39,8 @@ frontend/node_modules/
 # Frontend build & E2E artifacts
 frontend/dist/
 frontend/screenshots/
+frontend/.vite/
+.vite/
 e2e-screenshots/
 
 # Agent and CLI local state
