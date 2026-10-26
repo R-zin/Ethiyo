@@ -1,4 +1,4 @@
-.PHONY: all build run test test-race vet fmt fmt-check clean frontend-dev frontend-build frontend-test frontend-browser-test e2e-test
+.PHONY: all build run test test-race vet fmt fmt-check clean frontend-dev frontend-build frontend-test frontend-browser-test e2e-test k6-smoke k6-load k6-rate-limit
 
 # Default binary name and output directory
 BINARY_NAME=ethiyo
@@ -41,6 +41,15 @@ frontend-browser-test:
 
 e2e-test:
 	npm --prefix frontend run test:e2e
+
+k6-smoke:
+	k6 run tests/k6/smoke-test.js
+
+k6-load:
+	k6 run tests/k6/load-test.js
+
+k6-rate-limit:
+	k6 run tests/k6/rate-limit-test.js
 
 clean:
 	go clean
