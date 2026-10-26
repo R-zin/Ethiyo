@@ -148,7 +148,7 @@ cp .env.example .env
 
 ## Running Locally
 
-To start the server in development mode:
+To start the backend server in development mode:
 
 ```bash
 # Using make
@@ -156,6 +156,24 @@ make run
 
 # Or directly with Go
 go run ./cmd/server
+```
+
+### Running the Frontend
+
+Ethiyo includes a dedicated modern Nordic Minimalist React 19 web application in `frontend/`:
+
+```bash
+# Run Vite development server on http://localhost:3000 (proxies /api to :8080)
+make frontend-dev
+
+# Run frontend test suite (Vitest + React Testing Library)
+make frontend-test
+
+# Build production bundle
+make frontend-build
+
+# Run automated headless Chromium E2E verification
+make e2e-test
 ```
 
 Example startup log:
@@ -406,10 +424,17 @@ Unit tests use `httptest` and in-memory mocks to isolate tests from live network
 Ethiyo/
 ├── .github/
 │   └── workflows/
-│       └── actions.yml      # GitHub Actions CI workflow
+│       └── actions.yml      # GitHub Actions CI workflow (Quality, Security, E2E Chromium)
 ├── cmd/
 │   └── server/
 │       └── main.go          # Application entrypoint
+├── frontend/                # Nordic Minimalist React 19 + TypeScript + Vite web application
+│   ├── src/                 # Components (Header, Map, Tracker, SearchBar, States)
+│   ├── public/              # Static branding and icons
+│   ├── browser-verification-suite.cjs # Headless Chromium DevTools CDP test runner
+│   ├── mock-chalo.cjs       # Deterministic upstream test mock server for CI
+│   ├── package.json         # Frontend dependencies and test scripts
+│   └── vite.config.ts       # Vite configuration with proxy to Go backend
 ├── internal/
 │   ├── auth/                # Google OAuth2 and HMAC CSRF state validation
 │   ├── browser/             # Cross-platform browser locator and concurrency manager
@@ -421,9 +446,10 @@ Ethiyo/
 │   └── server/              # Server assembly and graceful shutdown lifecycle
 ├── .env.example             # Example environment configuration
 ├── .gitignore               # Ignored files (binaries, secrets, IDE, OS)
+├── .mcp.json                # Model Context Protocol configuration
 ├── go.mod                   # Go module definitions
 ├── go.sum                   # Checksums for direct and indirect dependencies
-├── Makefile                 # Development and build tasks
+├── Makefile                 # Development, build, frontend, and E2E automation tasks
 ├── main.go                  # Root runner shim
 └── README.md                # Project documentation
 ```
