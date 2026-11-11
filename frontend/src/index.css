@@ -16,6 +16,16 @@
   body {
     font-feature-settings: "cv02", "cv03", "cv04", "cv11";
   }
+
+  /* Accessible focus visible indicators for keyboard navigation (WCAG 2.1 AA 2.4.7) */
+  :focus-visible {
+    outline: 2px solid #0284c7;
+    outline-offset: 2px;
+  }
+
+  .dark :focus-visible {
+    outline-color: #38bdf8;
+  }
 }
 
 /* Custom Minimalist Map styling */

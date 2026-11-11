@@ -30,7 +30,7 @@ export function SkeletonLoader() {
 
       {/* Map Skeleton */}
       <div className="h-96 rounded-lg border border-nordic-200/80 dark:border-nordic-800 bg-nordic-100/70 dark:bg-nordic-900/60 animate-pulse flex items-center justify-center">
-        <span className="text-xs font-mono text-nordic-400">Loading satellite coordinates...</span>
+        <span className="text-xs font-mono text-nordic-600 dark:text-nordic-400">Loading satellite coordinates...</span>
       </div>
     </div>
   )

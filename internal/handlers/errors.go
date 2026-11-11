@@ -18,6 +18,8 @@ func HandleError(c *gin.Context, err error) {
 		return
 	}
 
+	_ = c.Error(err)
+
 	switch {
 	case errors.Is(err, models.ErrBusCodeRequired) || errors.Is(err, models.ErrInvalidBusCodeFormat):
 		c.JSON(http.StatusBadRequest, models.NewErrorResponse("INVALID_BUS_CODE", err.Error()))
@@ -42,6 +44,9 @@ func HandleError(c *gin.Context, err error) {
 
 	case errors.Is(err, browser.ErrConcurrencyLimitReached):
 		c.JSON(http.StatusServiceUnavailable, models.NewErrorResponse("BROWSER_BUSY", "Browser capacity is currently saturated; please retry shortly"))
+
+	case errors.Is(err, chalo.ErrScraperDisabled):
+		c.JSON(http.StatusServiceUnavailable, models.NewErrorResponse("SCRAPER_DISABLED", "Live route scraping is currently disabled"))
 
 	case errors.Is(err, context.Canceled):
 		c.JSON(http.StatusBadRequest, models.NewErrorResponse("REQUEST_CANCELED", "Client request was canceled"))

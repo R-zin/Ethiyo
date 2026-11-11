@@ -33,15 +33,31 @@ export function SearchBar({ onSearch, isLoading = false, initialCode = '' }: Sea
     }
   }, [initialCode])
 
-  // Global '/' keyboard shortcut to focus search input
+  // Global '/' keyboard shortcut to focus search input (without hijacking active inputs)
   useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === '/' && document.activeElement !== inputRef.current) {
-        e.preventDefault()
-        inputRef.current?.focus()
-        inputRef.current?.select()
+    const isEditableElement = (el: Element | null): boolean => {
+      if (!el || !(el instanceof HTMLElement)) return false
+      const tag = el.tagName.toUpperCase()
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') {
+        return true
       }
+      return el.isContentEditable || el.getAttribute('contenteditable') === 'true'
     }
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== '/' || e.ctrlKey || e.metaKey || e.altKey) {
+        return
+      }
+
+      if (isEditableElement(document.activeElement) || isEditableElement(e.target as Element)) {
+        return
+      }
+
+      e.preventDefault()
+      inputRef.current?.focus()
+      inputRef.current?.select()
+    }
+
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [])
@@ -76,7 +92,7 @@ export function SearchBar({ onSearch, isLoading = false, initialCode = '' }: Sea
         </label>
 
         <div className="relative flex items-center">
-          <div className="absolute left-3.5 text-nordic-400 dark:text-nordic-500 pointer-events-none">
+          <div className="absolute left-3.5 text-nordic-500 dark:text-nordic-400 pointer-events-none">
             <Search className="w-4 h-4" />
           </div>
 
@@ -91,7 +107,7 @@ export function SearchBar({ onSearch, isLoading = false, initialCode = '' }: Sea
             disabled={isLoading}
             autoCapitalize="characters"
             spellCheck={false}
-            className="w-full pl-10 pr-24 py-3 rounded-lg border border-nordic-200 dark:border-nordic-800 bg-white dark:bg-nordic-900 text-nordic-900 dark:text-nordic-100 placeholder:text-nordic-400 focus:outline-none focus:ring-1 focus:ring-frost-500 focus:border-frost-500 text-sm font-mono tracking-wide transition-all shadow-sm"
+            className="w-full pl-10 pr-24 py-3 rounded-lg border border-nordic-200 dark:border-nordic-800 bg-white dark:bg-nordic-900 text-nordic-900 dark:text-nordic-100 placeholder:text-nordic-500 dark:placeholder:text-nordic-400 focus:outline-none focus:ring-2 focus:ring-frost-500 focus:border-frost-500 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-frost-500 text-sm font-mono tracking-wide transition-all shadow-sm"
           />
 
           <div className="absolute right-2 flex items-center gap-1.5">
@@ -102,7 +118,7 @@ export function SearchBar({ onSearch, isLoading = false, initialCode = '' }: Sea
                   setQuery('')
                   inputRef.current?.focus()
                 }}
-                className="p-1 rounded text-nordic-400 hover:text-nordic-600 dark:hover:text-nordic-200"
+                className="p-1 rounded text-nordic-500 dark:text-nordic-400 hover:text-nordic-700 dark:hover:text-nordic-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-frost-500"
                 aria-label="Clear input"
               >
                 <X className="w-3.5 h-3.5" />
@@ -112,7 +128,7 @@ export function SearchBar({ onSearch, isLoading = false, initialCode = '' }: Sea
             <button
               type="submit"
               disabled={isLoading || !query.trim()}
-              className="px-3 py-1.5 rounded-md bg-nordic-900 text-white dark:bg-frost-600 dark:hover:bg-frost-500 hover:bg-nordic-800 text-xs font-medium tracking-wide transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5"
+              className="px-3 py-1.5 rounded-md bg-nordic-900 text-white dark:bg-frost-600 dark:hover:bg-frost-500 hover:bg-nordic-800 text-xs font-medium tracking-wide transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-1.5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-frost-500 focus-visible:ring-offset-2"
             >
               <span>Track</span>
               <kbd className="hidden sm:inline text-[10px] bg-nordic-800/80 dark:bg-frost-700/80 px-1 py-0.5 rounded font-mono text-nordic-300">
@@ -125,7 +141,7 @@ export function SearchBar({ onSearch, isLoading = false, initialCode = '' }: Sea
 
       {/* Suggested Routes & Recent Search Chips */}
       <div className="flex flex-wrap items-center gap-2 pt-1 text-xs">
-        <span className="text-nordic-400 dark:text-nordic-500 font-medium flex items-center gap-1">
+        <span className="text-nordic-600 dark:text-nordic-400 font-medium flex items-center gap-1">
           <Sparkles className="w-3 h-3 text-frost-500" /> Suggestions:
         </span>
         {PRESET_ROUTES.map(item => (
@@ -133,7 +149,7 @@ export function SearchBar({ onSearch, isLoading = false, initialCode = '' }: Sea
             key={item.code}
             type="button"
             onClick={() => handleSelectPreset(item.code)}
-            className="px-2.5 py-1 rounded border border-nordic-200/90 dark:border-nordic-800 bg-white dark:bg-nordic-900 hover:border-frost-400 dark:hover:border-frost-600 text-nordic-700 dark:text-nordic-300 font-mono text-xs transition-colors"
+            className="px-2.5 py-1 rounded border border-nordic-200/90 dark:border-nordic-800 bg-white dark:bg-nordic-900 hover:border-frost-400 dark:hover:border-frost-600 text-nordic-700 dark:text-nordic-300 font-mono text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-frost-500"
           >
             {item.code}
           </button>
@@ -142,7 +158,7 @@ export function SearchBar({ onSearch, isLoading = false, initialCode = '' }: Sea
         {recentSearches.length > 0 && (
           <>
             <span className="text-nordic-400 dark:text-nordic-600 ml-1">·</span>
-            <span className="text-nordic-400 dark:text-nordic-500 font-medium flex items-center gap-1">
+            <span className="text-nordic-600 dark:text-nordic-400 font-medium flex items-center gap-1">
               <History className="w-3 h-3" /> Recent:
             </span>
             {recentSearches.map(code => (
@@ -150,7 +166,7 @@ export function SearchBar({ onSearch, isLoading = false, initialCode = '' }: Sea
                 key={code}
                 type="button"
                 onClick={() => handleSelectPreset(code)}
-                className="px-2 py-0.5 rounded bg-nordic-100 dark:bg-nordic-800/70 hover:bg-nordic-200 dark:hover:bg-nordic-800 text-nordic-600 dark:text-nordic-400 font-mono text-xs transition-colors"
+                className="px-2 py-0.5 rounded bg-nordic-100 dark:bg-nordic-800/70 hover:bg-nordic-200 dark:hover:bg-nordic-800 text-nordic-700 dark:text-nordic-300 font-mono text-xs transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-frost-500"
               >
                 {code}
               </button>

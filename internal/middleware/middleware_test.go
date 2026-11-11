@@ -1,7 +1,11 @@
 package middleware
 
 import (
+	"bytes"
+	"context"
+	"crypto/tls"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -355,5 +359,101 @@ func TestRateLimiterMaxCapacity(t *testing.T) {
 	// 4th client rejected because maxClients is reached
 	if limiter.allow("4.4.4.4") {
 		t.Errorf("expected 4th client to be rejected when capacity is full")
+	}
+}
+
+func TestRequestIDContextPropagation(t *testing.T) {
+	r := gin.New()
+	r.Use(RequestID())
+	var ctxReqID any
+	r.GET("/ctx-test", func(c *gin.Context) {
+		ctxReqID = c.Request.Context().Value(RequestIDKey)
+		c.Status(http.StatusOK)
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/ctx-test", nil)
+	req.Header.Set(RequestIDHeader, "trace-abc-123")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if ctxReqID != "trace-abc-123" {
+		t.Errorf("expected request context to carry request ID 'trace-abc-123', got %v", ctxReqID)
+	}
+}
+
+func TestSecurityHeadersCSPAndHSTS(t *testing.T) {
+	r := gin.New()
+	r.Use(SecurityHeaders())
+	r.GET("/sec", func(c *gin.Context) {
+		c.Status(http.StatusOK)
+	})
+
+	// Case 1: Plain HTTP request - no HSTS
+	reqHTTP := httptest.NewRequest(http.MethodGet, "/sec", nil)
+	wHTTP := httptest.NewRecorder()
+	r.ServeHTTP(wHTTP, reqHTTP)
+
+	csp := wHTTP.Header().Get("Content-Security-Policy")
+	expectedCSP := "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline' https://unpkg.com; img-src 'self' data: https://*.tile.openstreetmap.org https://unpkg.com; connect-src 'self'; font-src 'self' data:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+	if csp != expectedCSP {
+		t.Errorf("expected CSP %q, got %q", expectedCSP, csp)
+	}
+
+	if wHTTP.Header().Get("Strict-Transport-Security") != "" {
+		t.Errorf("plain HTTP should not set HSTS header")
+	}
+
+	// Case 2: TLS request - HSTS should be present
+	reqTLS := httptest.NewRequest(http.MethodGet, "/sec", nil)
+	reqTLS.TLS = &tls.ConnectionState{}
+	wTLS := httptest.NewRecorder()
+	r.ServeHTTP(wTLS, reqTLS)
+
+	if wTLS.Header().Get("Strict-Transport-Security") != "max-age=31536000; includeSubDomains" {
+		t.Errorf("expected HSTS for TLS request, got %q", wTLS.Header().Get("Strict-Transport-Security"))
+	}
+
+	// Case 3: X-Forwarded-Proto https - HSTS should be present
+	reqProto := httptest.NewRequest(http.MethodGet, "/sec", nil)
+	reqProto.Header.Set("X-Forwarded-Proto", "https")
+	wProto := httptest.NewRecorder()
+	r.ServeHTTP(wProto, reqProto)
+
+	if wProto.Header().Get("Strict-Transport-Security") != "max-age=31536000; includeSubDomains" {
+		t.Errorf("expected HSTS for X-Forwarded-Proto=https, got %q", wProto.Header().Get("Strict-Transport-Security"))
+	}
+}
+
+func TestCORSAccessControlMaxAge(t *testing.T) {
+	r := gin.New()
+	r.Use(CORS([]string{"https://example.com"}))
+	r.OPTIONS("/test", func(c *gin.Context) {
+		c.Status(http.StatusOK)
+	})
+
+	req := httptest.NewRequest(http.MethodOptions, "/test", nil)
+	req.Header.Set("Origin", "https://example.com")
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if got := w.Header().Get("Access-Control-Max-Age"); got != "86400" {
+		t.Errorf("expected Access-Control-Max-Age: 86400, got %q", got)
+	}
+}
+
+func TestContextHandlerSlog(t *testing.T) {
+	var buf bytes.Buffer
+	baseHandler := slog.NewJSONHandler(&buf, &slog.HandlerOptions{
+		Level: slog.LevelInfo,
+	})
+	handler := NewContextHandler(baseHandler)
+	logger := slog.New(handler)
+
+	ctx := context.WithValue(context.Background(), RequestIDKey, "log-trace-999")
+	logger.InfoContext(ctx, "test event", "extra", "val")
+
+	output := buf.String()
+	if !strings.Contains(output, `"request_id":"log-trace-999"`) {
+		t.Errorf("expected log to contain request_id attribute from context, got: %s", output)
 	}
 }

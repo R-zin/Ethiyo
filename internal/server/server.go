@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -22,9 +23,12 @@ import (
 
 // Server encapsulates the HTTP server and its dependencies.
 type Server struct {
-	cfg    *config.Config
-	engine *gin.Engine
-	http   *http.Server
+	cfg         *config.Config
+	engine      *gin.Engine
+	http        *http.Server
+	rateLimiter *middleware.RateLimiter
+	browserMgr  *browser.Manager
+	running     atomic.Bool
 }
 
 // New constructs a configured Server instance.
@@ -53,20 +57,33 @@ func New(cfg *config.Config) (*Server, error) {
 
 	chaloClient := chalo.NewClient(cfg.ChaloBaseURL, cfg.RequestTimeout)
 	chaloScraper := chalo.NewScraper(browserMgr, cfg.ChaloBaseURL, cfg.BrowserTimeout)
-	chaloService := chalo.NewService(chaloClient, chaloScraper)
+	chaloService := chalo.NewService(
+		chaloClient,
+		chaloScraper,
+		chalo.WithScraperEnabled(cfg.ScraperEnabled),
+	)
 
 	oauthService := auth.NewGoogleService(cfg)
+	rateLimiter := middleware.NewRateLimiter(cfg.RateLimitRPS, cfg.RateLimitBurst)
+
+	srv := &Server{
+		cfg:         cfg,
+		rateLimiter: rateLimiter,
+		browserMgr:  browserMgr,
+	}
+	srv.running.Store(true)
 
 	// 3. Initialize HTTP handlers
-	healthHandler := handlers.NewHealthHandler(browserPath)
+	healthHandler := handlers.NewHealthHandler(browserPath, srv.running.Load)
 	busHandler := handlers.NewBusHandler(chaloService)
 	isSecureCookie := cfg.Env == "production"
 	authHandler := handlers.NewAuthHandler(oauthService, isSecureCookie)
 
 	// 4. Setup Gin engine with middleware
 	engine := gin.New()
-	_ = engine.SetTrustedProxies(nil)
-	rateLimiter := middleware.NewRateLimiter(cfg.RateLimitRPS, cfg.RateLimitBurst)
+	if err := engine.SetTrustedProxies(cfg.TrustedProxies); err != nil {
+		return nil, fmt.Errorf("failed to configure trusted proxies: %w", err)
+	}
 
 	engine.Use(
 		middleware.RequestID(),
@@ -79,9 +96,11 @@ func New(cfg *config.Config) (*Server, error) {
 	)
 
 	// 5. Register Routes
-	// Health routes
+	// Health and readiness routes
 	engine.GET("/health", healthHandler.Check)
 	engine.GET("/api/v1/health", healthHandler.Check)
+	engine.GET("/ready", healthHandler.Ready)
+	engine.GET("/api/v1/ready", healthHandler.Ready)
 
 	// Modern V1 routes
 	v1 := engine.Group("/api/v1")
@@ -117,16 +136,35 @@ func New(cfg *config.Config) (*Server, error) {
 		IdleTimeout:       60 * time.Second,
 	}
 
-	return &Server{
-		cfg:    cfg,
-		engine: engine,
-		http:   httpServer,
-	}, nil
+	srv.engine = engine
+	srv.http = httpServer
+
+	return srv, nil
 }
 
 // Engine returns the underlying Gin engine (useful for testing).
 func (s *Server) Engine() *gin.Engine {
 	return s.engine
+}
+
+// IsRunning returns whether the server is currently marked running.
+func (s *Server) IsRunning() bool {
+	return s.running.Load()
+}
+
+// Close gracefully closes the server and frees resources.
+func (s *Server) Close() error {
+	s.running.Store(false)
+	if s.rateLimiter != nil {
+		s.rateLimiter.Stop()
+	}
+	if s.browserMgr != nil {
+		_ = s.browserMgr.Close()
+	}
+	if s.http != nil {
+		return s.http.Close()
+	}
+	return nil
 }
 
 // Start runs the HTTP server and blocks until an interrupt signal is received.
@@ -148,6 +186,14 @@ func (s *Server) Start() error {
 		return fmt.Errorf("server error: %w", err)
 	case sig := <-quit:
 		slog.Info("shutting down server...", "signal", sig.String())
+	}
+
+	s.running.Store(false)
+	if s.rateLimiter != nil {
+		s.rateLimiter.Stop()
+	}
+	if s.browserMgr != nil {
+		_ = s.browserMgr.Close()
 	}
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)

@@ -28,35 +28,57 @@ export function TransitMap({
     !isNaN(latitude) &&
     !isNaN(longitude)
 
+  // Initialize and tear down Leaflet map instance cleanly
   useEffect(() => {
     if (!mapContainerRef.current) return
 
-    // Default to Bangalore/Delhi or coordinate center if present
-    const centerLat = hasCoords ? latitude : 12.9716
-    const centerLng = hasCoords ? longitude : 77.5946
-
-    if (!mapInstanceRef.current) {
-      const map = L.map(mapContainerRef.current, {
-        zoomControl: false,
-        attributionControl: true,
-      }).setView([centerLat, centerLng], hasCoords ? 15 : 12)
-
-      L.control
-        .zoom({
-          position: 'bottomright',
-        })
-        .addTo(map)
-
-      // OpenStreetMap standard tiles
-      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-        maxZoom: 19,
-        attribution: '&copy; OpenStreetMap contributors',
-      }).addTo(map)
-
-      mapInstanceRef.current = map
+    // Teardown existing instance if somehow retained
+    if (mapInstanceRef.current) {
+      if (markerRef.current) {
+        markerRef.current.remove()
+        markerRef.current = null
+      }
+      mapInstanceRef.current.remove()
+      mapInstanceRef.current = null
     }
 
+    const defaultLat = 12.9716
+    const defaultLng = 77.5946
+    const centerLat = hasCoords ? latitude : defaultLat
+    const centerLng = hasCoords ? longitude : defaultLng
+
+    const map = L.map(mapContainerRef.current, {
+      zoomControl: false,
+      attributionControl: true,
+    }).setView([centerLat, centerLng], hasCoords ? 15 : 12)
+
+    L.control
+      .zoom({
+        position: 'bottomright',
+      })
+      .addTo(map)
+
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19,
+      attribution: '&copy; OpenStreetMap contributors',
+    }).addTo(map)
+
+    mapInstanceRef.current = map
+
+    return () => {
+      if (markerRef.current) {
+        markerRef.current.remove()
+        markerRef.current = null
+      }
+      map.remove()
+      mapInstanceRef.current = null
+    }
+  }, [])
+
+  // Manage bus marker lifecycle and position updates
+  useEffect(() => {
     const map = mapInstanceRef.current
+    if (!map) return
 
     if (hasCoords) {
       const customIcon = L.divIcon({
@@ -97,12 +119,13 @@ export function TransitMap({
         </div>
       `
       markerRef.current.bindPopup(popupContent)
-
       map.panTo([latitude, longitude], { animate: true, duration: 0.8 })
-    }
-
-    return () => {
-      // Keep map initialized between prop updates
+    } else {
+      // Clean up marker when coordinates are removed or become invalid
+      if (markerRef.current) {
+        markerRef.current.remove()
+        markerRef.current = null
+      }
     }
   }, [latitude, longitude, hasCoords, busCode, routeName, speedKmh])
 
@@ -135,7 +158,7 @@ export function TransitMap({
       {hasCoords && (
         <button
           onClick={handleCenterOnBus}
-          className="absolute top-3 right-3 z-20 p-2.5 rounded-md bg-white dark:bg-nordic-900 border border-nordic-200/80 dark:border-nordic-800 text-nordic-700 dark:text-nordic-200 hover:bg-nordic-50 dark:hover:bg-nordic-800 shadow-sm transition-colors"
+          className="absolute top-3 right-3 z-20 p-2.5 rounded-md bg-white dark:bg-nordic-900 border border-nordic-200/80 dark:border-nordic-800 text-nordic-700 dark:text-nordic-200 hover:bg-nordic-50 dark:hover:bg-nordic-800 shadow-sm transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-frost-500"
           title="Recenter map on bus position"
           aria-label="Center map on vehicle location"
         >

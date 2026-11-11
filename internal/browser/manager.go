@@ -18,15 +18,19 @@ var (
 	// ErrInvalidTimeout is returned when a non-positive timeout is supplied for an operation
 	// while the manager has no usable default configured.
 	ErrInvalidTimeout = errors.New("timeout must be positive")
+
+	// ErrBrowserClosed is returned when an operation is attempted on a closed browser manager.
+	ErrBrowserClosed = errors.New("browser manager is closed")
 )
 
 // Manager coordinates chromedp browser execution and enforces concurrency limits.
 type Manager struct {
-	mu             sync.RWMutex // guards execPath
+	mu             sync.RWMutex // guards execPath and closed
 	execPath       string
 	headless       bool
 	defaultTimeout time.Duration
 	sem            chan struct{}
+	closed         bool
 }
 
 // NewManager creates a new BrowserManager.
@@ -54,6 +58,13 @@ func (m *Manager) AcquireSession(parentCtx context.Context, timeout time.Duratio
 	if timeout <= 0 {
 		return nil, ErrInvalidTimeout
 	}
+
+	m.mu.RLock()
+	if m.closed {
+		m.mu.RUnlock()
+		return nil, ErrBrowserClosed
+	}
+	m.mu.RUnlock()
 
 	// Fast path: an already-canceled caller context fails immediately rather
 	// than racing a free semaphore slot in the select below.
@@ -119,4 +130,24 @@ func (m *Manager) SetExecPath(path string) {
 	m.execPath = path
 	m.mu.Unlock()
 	slog.Info("browser executable configured", "path", path)
+}
+
+// Close shuts down the browser manager and prevents new sessions.
+func (m *Manager) Close() error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.closed = true
+	return nil
+}
+
+// ActiveWorkers returns the number of currently active browser sessions.
+func (m *Manager) ActiveWorkers() int {
+	return len(m.sem)
+}
+
+// IsClosed returns whether the browser manager is closed.
+func (m *Manager) IsClosed() bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.closed
 }

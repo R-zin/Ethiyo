@@ -584,3 +584,92 @@ func TestV1GetURL(t *testing.T) {
 		t.Errorf("expected success true")
 	}
 }
+
+func TestHandleErrorAttachesToGinContext(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	testErr := errors.New("sample domain error")
+	var recordedErrors []*gin.Error
+
+	r.GET("/err-test", func(c *gin.Context) {
+		HandleError(c, testErr)
+		recordedErrors = c.Errors
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/err-test", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if len(recordedErrors) != 1 {
+		t.Fatalf("expected 1 error attached to Gin context, got %d", len(recordedErrors))
+	}
+	if recordedErrors[0].Err != testErr {
+		t.Errorf("expected attached error %v, got %v", testErr, recordedErrors[0].Err)
+	}
+}
+
+func TestHandleErrorScraperDisabled(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	r := gin.New()
+	r.GET("/scraper-err", func(c *gin.Context) {
+		HandleError(c, chalo.ErrScraperDisabled)
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/scraper-err", nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, req)
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503 for ErrScraperDisabled, got %d", w.Code)
+	}
+	var res models.ErrorResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &res); err != nil {
+		t.Fatalf("failed to unmarshal JSON: %v", err)
+	}
+	if res.Error.Code != "SCRAPER_DISABLED" {
+		t.Errorf("expected code SCRAPER_DISABLED, got %q", res.Error.Code)
+	}
+}
+
+func TestReadyHandlerStates(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	// Case 1: Ready (browser available, running=true)
+	hReady := NewHealthHandler("/path/to/chrome", func() bool { return true })
+	rReady := gin.New()
+	rReady.GET("/ready", hReady.Ready)
+
+	req1 := httptest.NewRequest(http.MethodGet, "/ready", nil)
+	w1 := httptest.NewRecorder()
+	rReady.ServeHTTP(w1, req1)
+
+	if w1.Code != http.StatusOK {
+		t.Fatalf("expected 200 for ready handler, got %d", w1.Code)
+	}
+
+	// Case 2: Not ready (missing browser path)
+	hNoBrowser := NewHealthHandler("", func() bool { return true })
+	rNoBrowser := gin.New()
+	rNoBrowser.GET("/ready", hNoBrowser.Ready)
+
+	req2 := httptest.NewRequest(http.MethodGet, "/ready", nil)
+	w2 := httptest.NewRecorder()
+	rNoBrowser.ServeHTTP(w2, req2)
+
+	if w2.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503 for missing browser path, got %d", w2.Code)
+	}
+
+	// Case 3: Not ready (server not running)
+	hNotRunning := NewHealthHandler("/path/to/chrome", func() bool { return false })
+	rNotRunning := gin.New()
+	rNotRunning.GET("/ready", hNotRunning.Ready)
+
+	req3 := httptest.NewRequest(http.MethodGet, "/ready", nil)
+	w3 := httptest.NewRecorder()
+	rNotRunning.ServeHTTP(w3, req3)
+
+	if w3.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503 for server not running, got %d", w3.Code)
+	}
+}

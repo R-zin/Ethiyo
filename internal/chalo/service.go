@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"time"
 
 	"github.com/R-zin/Ethiyo/internal/models"
 )
@@ -17,18 +18,58 @@ type Service interface {
 	FetchPublicRoute(ctx context.Context, busCode string) (int, error)
 }
 
-// ChaloService implements the Service interface using Scraper and Client.
+// ChaloService implements the Service interface using Scraper, Client, and RouteCache.
 type ChaloService struct {
-	client  *Client
-	scraper *Scraper
+	client         *Client
+	scraper        *Scraper
+	cache          *RouteCache
+	scraperEnabled bool
 }
 
-// NewService creates a new ChaloService.
-func NewService(client *Client, scraper *Scraper) *ChaloService {
-	return &ChaloService{
-		client:  client,
-		scraper: scraper,
+// ServiceOption configures a ChaloService instance.
+type ServiceOption func(*ChaloService)
+
+// WithCache sets a custom RouteCache for ChaloService.
+func WithCache(cache *RouteCache) ServiceOption {
+	return func(s *ChaloService) {
+		s.cache = cache
 	}
+}
+
+// WithScraperEnabled configures whether the browser scraper is enabled.
+func WithScraperEnabled(enabled bool) ServiceOption {
+	return func(s *ChaloService) {
+		s.scraperEnabled = enabled
+	}
+}
+
+// NewService creates a new ChaloService with optional configuration.
+func NewService(client *Client, scraper *Scraper, opts ...ServiceOption) *ChaloService {
+	s := &ChaloService{
+		client:         client,
+		scraper:        scraper,
+		cache:          NewRouteCache(15*time.Minute, 10*time.Second),
+		scraperEnabled: true,
+	}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
+}
+
+// ScraperEnabled returns true if the scraper is currently enabled.
+func (s *ChaloService) ScraperEnabled() bool {
+	return s.scraperEnabled
+}
+
+// SetScraperEnabled dynamically enables or disables the scraper.
+func (s *ChaloService) SetScraperEnabled(enabled bool) {
+	s.scraperEnabled = enabled
+}
+
+// Cache returns the underlying RouteCache.
+func (s *ChaloService) Cache() *RouteCache {
+	return s.cache
 }
 
 // GetTrackingURL returns Chalo's live-tracking URL for a bus code. This is a
@@ -39,6 +80,17 @@ func (s *ChaloService) GetTrackingURL(ctx context.Context, busCode string) (stri
 	validCode, err := models.ValidateBusCode(busCode)
 	if err != nil {
 		return "", err
+	}
+
+	if s.cache != nil {
+		if cached, ok := s.cache.GetTracking(validCode); ok && cached.TrackingURL != "" {
+			slog.InfoContext(ctx, "cache hit for live tracking url (from tracking)", "bus_code", validCode)
+			return cached.TrackingURL, nil
+		}
+		if cached, ok := s.cache.GetRoute(validCode); ok && cached.TrackingURL != "" {
+			slog.InfoContext(ctx, "cache hit for live tracking url (from route)", "bus_code", validCode)
+			return cached.TrackingURL, nil
+		}
 	}
 
 	slog.InfoContext(ctx, "resolving live tracking url", "bus_code", validCode)
@@ -57,6 +109,13 @@ func (s *ChaloService) GetBusTracking(ctx context.Context, busCode string) (*mod
 		return nil, err
 	}
 
+	if s.cache != nil {
+		if cached, ok := s.cache.GetTracking(validCode); ok {
+			slog.InfoContext(ctx, "cache hit for live tracking", "bus_code", validCode)
+			return cached, nil
+		}
+	}
+
 	slog.InfoContext(ctx, "fetching live tracking", "bus_code", validCode)
 	body, trackURL, err := s.client.FetchLiveTracking(ctx, validCode)
 	if err != nil {
@@ -70,11 +129,17 @@ func (s *ChaloService) GetBusTracking(ctx context.Context, busCode string) (*mod
 		return nil, err
 	}
 
-	return &models.BusTrackingInfo{
+	info := &models.BusTrackingInfo{
 		BusCode:     validCode,
 		TrackingURL: live.TrackingURL,
 		Live:        live,
-	}, nil
+	}
+
+	if s.cache != nil {
+		s.cache.SetTracking(validCode, info)
+	}
+
+	return info, nil
 }
 
 // GetBusRoute discovers both the live tracking URL and route details URL.
@@ -84,6 +149,17 @@ func (s *ChaloService) GetBusRoute(ctx context.Context, busCode string) (*models
 		return nil, err
 	}
 
+	if s.cache != nil {
+		if cached, ok := s.cache.GetRoute(validCode); ok {
+			slog.InfoContext(ctx, "cache hit for bus route", "bus_code", validCode)
+			return cached, nil
+		}
+	}
+
+	if !s.scraperEnabled || s.scraper == nil {
+		return nil, ErrScraperDisabled
+	}
+
 	slog.InfoContext(ctx, "discovering bus routes", "bus_code", validCode)
 	trackURL, routeURL, err := s.scraper.DiscoverRoutes(ctx, validCode)
 	if err != nil {
@@ -91,11 +167,17 @@ func (s *ChaloService) GetBusRoute(ctx context.Context, busCode string) (*models
 		return nil, err
 	}
 
-	return &models.BusRouteInfo{
+	info := &models.BusRouteInfo{
 		BusCode:     validCode,
 		TrackingURL: trackURL,
 		RouteURL:    routeURL,
-	}, nil
+	}
+
+	if s.cache != nil {
+		s.cache.SetRoute(validCode, info)
+	}
+
+	return info, nil
 }
 
 // FetchRouteDetails fetches live route details from a discovered Chalo endpoint.

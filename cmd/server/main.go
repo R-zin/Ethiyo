@@ -5,15 +5,16 @@ import (
 	"os"
 
 	"github.com/R-zin/Ethiyo/internal/config"
+	"github.com/R-zin/Ethiyo/internal/middleware"
 	"github.com/R-zin/Ethiyo/internal/server"
 )
 
 func main() {
-	// Initialize structured logger
-	handler := slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+	// Initialize structured logger with context request_id propagation
+	baseHandler := slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
 		Level: slog.LevelInfo,
 	})
-	logger := slog.New(handler)
+	logger := slog.New(middleware.NewContextHandler(baseHandler))
 	slog.SetDefault(logger)
 
 	slog.Info("initializing Ethiyo server...")
