@@ -400,6 +400,85 @@ dependency review against the proposed changes.
 
 ---
 
+## Production Deployment & Operations
+
+### Container Deployment with Docker & Docker Compose
+
+Ethiyo includes an enterprise-grade, multi-stage `Dockerfile` with bundled Chromium, `tini` init signal management, non-root user execution (`appuser`), and shared memory configuration.
+
+#### Run with Docker Compose
+```bash
+docker compose up -d --build
+```
+
+#### Run with Docker CLI
+```bash
+docker build -t ethiyo:latest .
+docker run -d \
+  --name ethiyo \
+  --shm-size=512m \
+  -p 8080:8080 \
+  -e ENV=production \
+  -e CORS_ALLOWED_ORIGINS=https://yourdomain.com \
+  -e OAUTH_STATE_SECRET=your-32-byte-secret-hex \
+  ethiyo:latest
+```
+
+> **Note on `/dev/shm`**: Headless Chromium requires at least 512MB of shared memory to prevent renderer crashes under concurrent scraping load. When running on Kubernetes or Docker, always mount `/dev/shm` as `tmpfs` or set `--shm-size=512m`.
+
+---
+
+## Health Checks & Probes
+
+Ethiyo exposes two health and readiness probes:
+
+- **Liveness Probe**: `GET /health` (or `/api/v1/health`)
+  - Confirms the HTTP server is alive and responding.
+  - Returns `200 OK` with JSON `{ "status": "healthy", "browser": true }`.
+- **Readiness Probe**: `GET /ready` (or `/api/v1/ready`)
+  - Validates that the server is ready to receive client traffic (not draining during shutdown, browser executable available).
+  - Returns `503 Service Unavailable` during graceful shutdown or critical subsystem failure to allow load balancers to drain traffic seamlessly.
+
+---
+
+## Staged Rollout & Rollback Runbook
+
+Deployments should follow the incremental rollout process defined in `/shipping-and-launch`:
+
+```
+1. CANARY (5% traffic)    -> 1 hour soak; monitor error rate and P95 latency.
+2. STAGED 1 (25% traffic) -> 2 hour soak; verify memory and browser worker queue.
+3. STAGED 2 (50% traffic) -> 4 hour soak; verify upstream Chalo response times.
+4. FULL (100% traffic)    -> 24 hour soak; clean up older deployment versions.
+```
+
+### Rollout Decision Thresholds
+
+| Metric | Advance (Green) | Hold & Investigate (Yellow) | Roll Back Immediately (Red) |
+|---|---|---|---|
+| **Error Rate** | Within 10% of baseline | 10–50% above baseline | >2x baseline (>5%) |
+| **P95 Latency** | Within 20% of baseline (<800ms) | 20–50% above baseline | >50% above baseline (>2000ms) |
+| **Browser Pool Queue** | Idle capacity > 50% | Capacity 20–50% | Capacity exhausted (>90% saturated) |
+| **Upstream 5xx Rate** | <1% | 1–5% | >5% |
+
+### Emergency Rollback Procedures
+
+If any red condition is triggered:
+1. **Disable Browser Scraper via Kill-Switch**:
+   ```bash
+   # Dynamically disable headless Chromium scraping without redeploying code
+   export SCRAPER_ENABLED=false
+   ```
+2. **Revert Deployment**:
+   ```bash
+   git revert HEAD -m 1
+   git push origin main
+   ```
+3. **Verify Rollback**:
+   Confirm `/ready` responds with `200 OK` and error rates normalize within 60 seconds.
+
+---
+
 ## Testing
 
 Run the full automated test suite:

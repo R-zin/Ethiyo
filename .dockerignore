@@ -1,0 +1,14 @@
+.git
+.github
+.idea
+.agents
+.claude
+bin/
+dist/
+coverage/
+coverage.out
+coverage.txt
+frontend/node_modules/
+frontend/dist/
+frontend/e2e-screenshots/
+*.log

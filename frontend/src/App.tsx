@@ -53,9 +53,9 @@ export function App() {
 
   // Track bus function
   const handleTrackBus = useCallback(
-    async (busCode: string, isSilentRefresh = false) => {
+    async (busCode: string, isSilentRefresh = false): Promise<boolean> => {
       const clean = busCode.trim().toUpperCase()
-      if (!clean) return
+      if (!clean) return false
 
       if (isSilentRefresh) {
         setIsRefreshing(true)
@@ -83,6 +83,7 @@ export function App() {
           .catch(() => {
             // Non-fatal if route schedule discovery takes longer
           })
+        return true
       } catch (err: any) {
         setError({
           code: err.code || 'TRACKING_FAILED',
@@ -91,6 +92,7 @@ export function App() {
         if (!isSilentRefresh) {
           setTrackingData(null)
         }
+        return false
       } finally {
         setIsLoading(false)
         setIsRefreshing(false)
@@ -148,6 +150,7 @@ export function App() {
                 onRefresh={() => handleTrackBus(activeCode, true)}
                 isRefreshing={isRefreshing}
                 lastUpdated={lastUpdated}
+                hasError={!!error}
               />
 
               {/* View Switcher Tabs (Map View vs Route Spec) */}
@@ -164,7 +167,7 @@ export function App() {
                     aria-selected={activeTab === 'map'}
                     aria-controls="panel-map"
                     onClick={() => setActiveTab('map')}
-                    className={`px-3 py-1.5 rounded-md flex items-center gap-1.5 transition-colors ${
+                    className={`px-3 py-1.5 rounded-md flex items-center gap-1.5 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-frost-500 ${
                       activeTab === 'map'
                         ? 'bg-white dark:bg-nordic-800 text-nordic-900 dark:text-white shadow-sm font-semibold'
                         : 'text-nordic-600 dark:text-nordic-400 hover:text-nordic-900 dark:hover:text-white'
@@ -181,7 +184,7 @@ export function App() {
                     aria-selected={activeTab === 'route'}
                     aria-controls="panel-route"
                     onClick={() => setActiveTab('route')}
-                    className={`px-3 py-1.5 rounded-md flex items-center gap-1.5 transition-colors ${
+                    className={`px-3 py-1.5 rounded-md flex items-center gap-1.5 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-frost-500 ${
                       activeTab === 'route'
                         ? 'bg-white dark:bg-nordic-800 text-nordic-900 dark:text-white shadow-sm font-semibold'
                         : 'text-nordic-600 dark:text-nordic-400 hover:text-nordic-900 dark:hover:text-white'
@@ -192,7 +195,7 @@ export function App() {
                   </button>
                 </div>
 
-                <div className="text-xs text-nordic-400 hidden sm:block font-mono">
+                <div className="text-xs text-nordic-600 dark:text-nordic-400 hidden sm:block font-mono">
                   Coordinates: {trackingData.position?.latitude ? 'Live GPS' : 'Static Fallback'}
                 </div>
               </div>
@@ -227,14 +230,14 @@ export function App() {
       </main>
 
       {/* Nordic Minimalist Footer */}
-      <footer className="border-t border-nordic-200/80 dark:border-nordic-800/80 py-6 text-xs text-nordic-400 bg-white/50 dark:bg-nordic-950/50">
+      <footer className="border-t border-nordic-200/80 dark:border-nordic-800/80 py-6 text-xs text-nordic-600 dark:text-nordic-400 bg-white/50 dark:bg-nordic-950/50">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-3">
           <p className="flex items-center gap-1.5 font-mono">
             <span>Ethiyo Transit Platform</span>
             <span>·</span>
             <span>Nordic UI Design System</span>
           </p>
-          <div className="flex items-center gap-4 text-nordic-500">
+          <div className="flex items-center gap-4 text-nordic-600 dark:text-nordic-400">
             <span>REST API v1</span>
             <span>·</span>
             <span>Chromium Headless Interception</span>

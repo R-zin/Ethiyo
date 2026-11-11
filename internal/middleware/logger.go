@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"context"
 	"log/slog"
 	"time"
 
@@ -51,4 +52,44 @@ func Logger() gin.HandlerFunc {
 			slog.Info("http request", attrs...)
 		}
 	}
+}
+
+// ContextHandler wraps an slog.Handler to inject request_id from context.Context into log records.
+type ContextHandler struct {
+	slog.Handler
+}
+
+// NewContextHandler wraps the provided slog.Handler to automatically attach request_id from context.
+func NewContextHandler(h slog.Handler) *ContextHandler {
+	return &ContextHandler{Handler: h}
+}
+
+// Handle injects the request_id attribute if found in ctx and not already present on the record.
+func (h *ContextHandler) Handle(ctx context.Context, r slog.Record) error {
+	if ctx != nil {
+		if reqID, ok := ctx.Value(RequestIDKey).(string); ok && reqID != "" {
+			hasReqID := false
+			r.Attrs(func(a slog.Attr) bool {
+				if a.Key == RequestIDKey {
+					hasReqID = true
+					return false
+				}
+				return true
+			})
+			if !hasReqID {
+				r.AddAttrs(slog.String(RequestIDKey, reqID))
+			}
+		}
+	}
+	return h.Handler.Handle(ctx, r)
+}
+
+// WithAttrs returns a new ContextHandler wrapping the handler with attributes.
+func (h *ContextHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	return &ContextHandler{Handler: h.Handler.WithAttrs(attrs)}
+}
+
+// WithGroup returns a new ContextHandler wrapping the handler with a group.
+func (h *ContextHandler) WithGroup(name string) slog.Handler {
+	return &ContextHandler{Handler: h.Handler.WithGroup(name)}
 }

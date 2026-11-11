@@ -31,11 +31,11 @@ export function Header({
               <h1 className="font-semibold tracking-tight text-base text-nordic-900 dark:text-white">
                 Ethiyo
               </h1>
-              <span className="text-[10px] font-mono font-medium px-1.5 py-0.5 rounded bg-nordic-100 text-nordic-600 dark:bg-nordic-800 dark:text-nordic-300">
+              <span className="text-[10px] font-mono font-medium px-1.5 py-0.5 rounded bg-nordic-100 text-nordic-700 dark:bg-nordic-800 dark:text-nordic-300">
                 v1.2
               </span>
             </div>
-            <p className="text-xs text-nordic-500 dark:text-nordic-400 hidden sm:block">
+            <p className="text-xs text-nordic-600 dark:text-nordic-400 hidden sm:block">
               Nordic Transit Telemetry
             </p>
           </div>
@@ -47,7 +47,7 @@ export function Header({
           <button
             onClick={onInspectHealth}
             title={health ? `Backend: ${health.status} (${health.latencyMs}ms)` : 'Checking backend...'}
-            className="flex items-center gap-2 px-2.5 py-1.5 rounded-md border border-nordic-200 dark:border-nordic-800 hover:bg-nordic-50 dark:hover:bg-nordic-900 text-xs font-mono transition-colors text-nordic-600 dark:text-nordic-300"
+            className="flex items-center gap-2 px-2.5 py-1.5 rounded-md border border-nordic-200 dark:border-nordic-800 hover:bg-nordic-50 dark:hover:bg-nordic-900 text-xs font-mono transition-colors text-nordic-700 dark:text-nordic-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-frost-500"
             aria-label="View backend system status"
           >
             <span className="relative flex h-2 w-2">
@@ -68,7 +68,7 @@ export function Header({
               {healthLoading ? 'Connecting...' : isHealthy ? 'API Online' : 'Service Down'}
             </span>
             {health?.latencyMs !== undefined && (
-              <span className="text-nordic-400 text-[11px] hidden md:inline">
+              <span className="text-nordic-600 dark:text-nordic-400 text-[11px] hidden md:inline">
                 {health.latencyMs}ms
               </span>
             )}
@@ -80,7 +80,7 @@ export function Header({
             target="_blank"
             rel="noopener noreferrer"
             title="Open raw JSON health endpoint"
-            className="p-2 rounded-md border border-nordic-200 dark:border-nordic-800 text-nordic-600 dark:text-nordic-300 hover:bg-nordic-50 dark:hover:bg-nordic-900 transition-colors"
+            className="p-2 rounded-md border border-nordic-200 dark:border-nordic-800 text-nordic-700 dark:text-nordic-300 hover:bg-nordic-50 dark:hover:bg-nordic-900 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-frost-500"
             aria-label="Open backend health API"
           >
             <Terminal className="w-4 h-4" />
@@ -89,7 +89,7 @@ export function Header({
           {/* Theme Toggle */}
           <button
             onClick={onToggleTheme}
-            className="p-2 rounded-md border border-nordic-200 dark:border-nordic-800 text-nordic-600 dark:text-nordic-300 hover:bg-nordic-50 dark:hover:bg-nordic-900 transition-colors"
+            className="p-2 rounded-md border border-nordic-200 dark:border-nordic-800 text-nordic-700 dark:text-nordic-300 hover:bg-nordic-50 dark:hover:bg-nordic-900 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-frost-500"
             aria-label={`Switch to ${theme === 'light' ? 'dark' : 'light'} theme`}
           >
             {theme === 'light' ? (

@@ -165,3 +165,84 @@ func TestInvalidEnvValuesFallBackToDefaults(t *testing.T) {
 		t.Errorf("bad bool should fall back to true")
 	}
 }
+
+func TestTrustedProxiesAndScraperDefaults(t *testing.T) {
+	_ = os.Unsetenv("TRUSTED_PROXIES")
+	_ = os.Unsetenv("SCRAPER_ENABLED")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if !cfg.ScraperEnabled {
+		t.Errorf("expected ScraperEnabled default true, got false")
+	}
+	if len(cfg.TrustedProxies) != 0 {
+		t.Errorf("expected default TrustedProxies to be empty, got %v", cfg.TrustedProxies)
+	}
+
+	t.Setenv("TRUSTED_PROXIES", "10.0.0.1, 10.0.0.2, 192.168.1.1/24 ")
+	t.Setenv("SCRAPER_ENABLED", "false")
+
+	cfgCustom, err := Load()
+	if err != nil {
+		t.Fatalf("Load with custom: %v", err)
+	}
+	if cfgCustom.ScraperEnabled {
+		t.Errorf("expected ScraperEnabled false, got true")
+	}
+	expectedProxies := []string{"10.0.0.1", "10.0.0.2", "192.168.1.1/24"}
+	if len(cfgCustom.TrustedProxies) != len(expectedProxies) {
+		t.Fatalf("expected %d trusted proxies, got %v", len(expectedProxies), cfgCustom.TrustedProxies)
+	}
+	for i, want := range expectedProxies {
+		if cfgCustom.TrustedProxies[i] != want {
+			t.Errorf("proxy %d: expected %q, got %q", i, want, cfgCustom.TrustedProxies[i])
+		}
+	}
+}
+
+func TestProductionValidation(t *testing.T) {
+	baseCfg := func() *Config {
+		return &Config{
+			Port:                  "8080",
+			Env:                   "production",
+			BrowserMaxConcurrency: 4,
+			RequestTimeout:        10 * time.Second,
+			BrowserTimeout:        10 * time.Second,
+			RateLimitRPS:          10,
+			RateLimitBurst:        20,
+			CORSAllowedOrigins:    []string{"https://example.com"},
+		}
+	}
+
+	// Case 1: Wildcard CORS rejected in production
+	cfgWildcard := baseCfg()
+	cfgWildcard.CORSAllowedOrigins = []string{"*"}
+	if err := cfgWildcard.Validate(); err == nil {
+		t.Errorf("expected error for wildcard CORS origin in production")
+	}
+
+	// Case 2: Specific origin accepted in production
+	cfgSpecific := baseCfg()
+	if err := cfgSpecific.Validate(); err != nil {
+		t.Errorf("expected specific origin to pass in production, got: %v", err)
+	}
+
+	// Case 3: OAuth enabled in production without explicit OAUTH_STATE_SECRET env
+	cfgOAuth := baseCfg()
+	cfgOAuth.GoogleClientID = "client-id"
+	cfgOAuth.GoogleClientSecret = "secret"
+	cfgOAuth.GoogleRedirectURL = "https://example.com/callback"
+
+	_ = os.Unsetenv("OAUTH_STATE_SECRET")
+	if err := cfgOAuth.Validate(); err == nil {
+		t.Errorf("expected error when OAuth enabled in production without explicit OAUTH_STATE_SECRET")
+	}
+
+	// Case 4: OAuth enabled in production with explicit OAUTH_STATE_SECRET
+	t.Setenv("OAUTH_STATE_SECRET", "explicit-production-secret")
+	if err := cfgOAuth.Validate(); err != nil {
+		t.Errorf("expected OAuth with explicit secret to pass validation, got: %v", err)
+	}
+}

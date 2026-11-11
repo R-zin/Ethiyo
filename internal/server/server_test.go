@@ -52,6 +52,25 @@ func TestServerInitializationAndRoutes(t *testing.T) {
 		t.Fatalf("expected 200 for /api/v1/health, got %d", wV1.Code)
 	}
 
+	// Test /ready endpoint
+	reqReady := httptest.NewRequest(http.MethodGet, "/ready", nil)
+	wReady := httptest.NewRecorder()
+	engine.ServeHTTP(wReady, reqReady)
+
+	// In test environments with a browser discovered, /ready returns 200; without, 503. Both must return valid JSON.
+	if wReady.Code != http.StatusOK && wReady.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 200 or 503 for /ready, got %d", wReady.Code)
+	}
+
+	// Test /api/v1/ready endpoint
+	reqV1Ready := httptest.NewRequest(http.MethodGet, "/api/v1/ready", nil)
+	wV1Ready := httptest.NewRecorder()
+	engine.ServeHTTP(wV1Ready, reqV1Ready)
+
+	if wV1Ready.Code != http.StatusOK && wV1Ready.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 200 or 503 for /api/v1/ready, got %d", wV1Ready.Code)
+	}
+
 	// Test legacy /trackroute endpoint with missing buscode (should return 400, not crash)
 	reqLegacy := httptest.NewRequest(http.MethodGet, "/trackroute", nil)
 	wLegacy := httptest.NewRecorder()
@@ -203,5 +222,59 @@ func TestServerMiddlewareHeadersPresent(t *testing.T) {
 		if w.Header().Get(h) == "" {
 			t.Errorf("expected %s header on /health", h)
 		}
+	}
+}
+
+func TestServerTrustedProxies(t *testing.T) {
+	cfg := &config.Config{
+		Port:                  freePort(t),
+		Env:                   "test",
+		ChaloBaseURL:          "https://chalo.com",
+		RequestTimeout:        5 * time.Second,
+		BrowserTimeout:        5 * time.Second,
+		BrowserMaxConcurrency: 2,
+		RateLimitRPS:          10,
+		RateLimitBurst:        20,
+		TrustedProxies:        []string{"127.0.0.1", "10.0.0.0/8"},
+	}
+
+	srv, err := New(cfg)
+	if err != nil {
+		t.Fatalf("New with valid trusted proxies: %v", err)
+	}
+	defer srv.Close()
+
+	// Invalid CIDR/proxy should cause New to fail
+	cfgBad := &config.Config{
+		Port:                  freePort(t),
+		Env:                   "test",
+		ChaloBaseURL:          "https://chalo.com",
+		RequestTimeout:        5 * time.Second,
+		BrowserTimeout:        5 * time.Second,
+		BrowserMaxConcurrency: 2,
+		RateLimitRPS:          10,
+		RateLimitBurst:        20,
+		TrustedProxies:        []string{"invalid-ip-format"},
+	}
+	if _, err := New(cfgBad); err == nil {
+		t.Errorf("expected error when invalid trusted proxy CIDR is supplied")
+	}
+}
+
+func TestServerCleanShutdownResources(t *testing.T) {
+	srv := newTestServer(t)
+	if !srv.IsRunning() {
+		t.Errorf("expected server to be running after New")
+	}
+
+	if err := srv.Close(); err != nil {
+		t.Fatalf("Close returned error: %v", err)
+	}
+
+	if srv.IsRunning() {
+		t.Errorf("expected server to be stopped after Close")
+	}
+	if !srv.browserMgr.IsClosed() {
+		t.Errorf("expected browser manager to be closed after Close")
 	}
 }

@@ -13,8 +13,12 @@ import (
 // Config holds all configuration values for the Ethiyo service.
 type Config struct {
 	// Server settings
-	Port string
-	Env  string
+	Port           string
+	Env            string
+	TrustedProxies []string
+
+	// Scraper settings
+	ScraperEnabled bool
 
 	// Chalo API settings
 	ChaloBaseURL   string
@@ -43,6 +47,7 @@ func Load() (*Config, error) {
 	cfg := &Config{
 		Port:                  getEnv("PORT", "8080"),
 		Env:                   getEnv("ENV", "development"),
+		ScraperEnabled:        getBoolEnv("SCRAPER_ENABLED", true),
 		ChaloBaseURL:          strings.TrimRight(getEnv("CHALO_BASE_URL", "https://chalo.com"), "/"),
 		RequestTimeout:        getDurationEnv("REQUEST_TIMEOUT", 15*time.Second),
 		BrowserPath:           getEnv("BROWSER_PATH", ""),
@@ -61,6 +66,15 @@ func Load() (*Config, error) {
 	cfg.CORSAllowedOrigins = strings.Split(origins, ",")
 	for i := range cfg.CORSAllowedOrigins {
 		cfg.CORSAllowedOrigins[i] = strings.TrimSpace(cfg.CORSAllowedOrigins[i])
+	}
+
+	if tp := os.Getenv("TRUSTED_PROXIES"); strings.TrimSpace(tp) != "" {
+		for _, p := range strings.Split(tp, ",") {
+			p = strings.TrimSpace(p)
+			if p != "" {
+				cfg.TrustedProxies = append(cfg.TrustedProxies, p)
+			}
+		}
 	}
 
 	// Generate a secure random secret for OAuth state if not provided
@@ -99,6 +113,18 @@ func (c *Config) Validate() error {
 	if c.RateLimitBurst <= 0 {
 		return fmt.Errorf("RATE_LIMIT_BURST must be positive")
 	}
+
+	if c.Env == "production" {
+		for _, origin := range c.CORSAllowedOrigins {
+			if origin == "*" {
+				return fmt.Errorf("wildcard CORS origin '*' is not allowed in production")
+			}
+		}
+		if c.IsOAuthEnabled() && os.Getenv("OAUTH_STATE_SECRET") == "" {
+			return fmt.Errorf("OAUTH_STATE_SECRET must be explicitly set when OAuth is enabled in production")
+		}
+	}
+
 	return nil
 }
 

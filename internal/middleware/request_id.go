@@ -1,6 +1,7 @@
 package middleware
 
 import (
+	"context"
 	"crypto/rand"
 	"encoding/hex"
 
@@ -31,6 +32,7 @@ func RequestID() gin.HandlerFunc {
 
 		c.Set(RequestIDKey, reqID)
 		c.Header(RequestIDHeader, reqID)
+		c.Request = c.Request.WithContext(context.WithValue(c.Request.Context(), RequestIDKey, reqID))
 		c.Next()
 	}
 }

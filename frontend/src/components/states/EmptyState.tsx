@@ -14,13 +14,13 @@ export function EmptyState({ onSelectSample }: EmptyStateProps) {
       <h2 className="text-lg font-semibold tracking-tight text-nordic-900 dark:text-white">
         Real-Time Transit Tracking
       </h2>
-      <p className="mt-1.5 text-sm text-nordic-500 dark:text-nordic-400 max-w-md mx-auto">
+      <p className="mt-1.5 text-sm text-nordic-600 dark:text-nordic-400 max-w-md mx-auto">
         Enter any Chalo transit bus code above to track live GPS telemetry, stop arrivals, and scheduler route details.
       </p>
 
       {/* Suggested Quick Starts */}
       <div className="mt-8 flex flex-col sm:flex-row items-center justify-center gap-3">
-        <span className="text-xs font-medium text-nordic-400 uppercase tracking-wider">
+        <span className="text-xs font-medium text-nordic-600 dark:text-nordic-400 uppercase tracking-wider">
           Quick Start:
         </span>
         <div className="flex flex-wrap items-center justify-center gap-2">
@@ -33,7 +33,7 @@ export function EmptyState({ onSelectSample }: EmptyStateProps) {
               key={sample.code}
               type="button"
               onClick={() => onSelectSample(sample.code)}
-              className="px-3 py-1.5 rounded-md border border-nordic-200 dark:border-nordic-800 bg-white dark:bg-nordic-900 hover:border-frost-400 dark:hover:border-frost-600 text-xs font-mono text-nordic-700 dark:text-nordic-200 transition-colors flex items-center gap-1.5 shadow-sm"
+              className="px-3 py-1.5 rounded-md border border-nordic-200 dark:border-nordic-800 bg-white dark:bg-nordic-900 hover:border-frost-400 dark:hover:border-frost-600 text-xs font-mono text-nordic-700 dark:text-nordic-200 transition-colors flex items-center gap-1.5 shadow-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-frost-500"
             >
               <span>{sample.code}</span>
               <ArrowRight className="w-3 h-3 text-frost-500" />
@@ -50,7 +50,7 @@ export function EmptyState({ onSelectSample }: EmptyStateProps) {
             <h3 className="text-xs font-semibold text-nordic-800 dark:text-nordic-200">
               Direct Vehicle API
             </h3>
-            <p className="text-[11px] text-nordic-500 mt-0.5">
+            <p className="text-[11px] text-nordic-600 dark:text-nordic-400 mt-0.5">
               Instant sub-second GPS coordinate snapshots directly from transit sensors.
             </p>
           </div>
@@ -62,7 +62,7 @@ export function EmptyState({ onSelectSample }: EmptyStateProps) {
             <h3 className="text-xs font-semibold text-nordic-800 dark:text-nordic-200">
               Chromium Route Interception
             </h3>
-            <p className="text-[11px] text-nordic-500 mt-0.5">
+            <p className="text-[11px] text-nordic-600 dark:text-nordic-400 mt-0.5">
               Automated headless browser network listeners for live token & route discovery.
             </p>
           </div>

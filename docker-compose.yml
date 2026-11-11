@@ -1,0 +1,27 @@
+services:
+  ethiyo:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ethiyo:latest
+    container_name: ethiyo-app
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      - PORT=8080
+      - ENV=production
+      - CHALO_BASE_URL=https://chalo.com
+      - REQUEST_TIMEOUT=15s
+      - BROWSER_TIMEOUT=15s
+      - BROWSER_MAX_CONCURRENCY=4
+      - RATE_LIMIT_RPS=10.0
+      - RATE_LIMIT_BURST=20
+      - CORS_ALLOWED_ORIGINS=http://localhost:3000,http://localhost:8080
+    shm_size: '512m'
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

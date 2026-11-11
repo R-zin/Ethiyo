@@ -144,3 +144,47 @@ func TestAcquireAndReleaseCycle(t *testing.T) {
 	}
 	sess2.Cancel()
 }
+
+func TestManagerCloseAndActiveWorkers(t *testing.T) {
+	mgr := NewManager("", true, 5*time.Second, 2)
+	if workers := mgr.ActiveWorkers(); workers != 0 {
+		t.Fatalf("expected 0 active workers initially, got %d", workers)
+	}
+
+	sess1, err := mgr.AcquireSession(context.Background(), time.Second)
+	if err != nil {
+		t.Fatalf("unexpected error acquiring session: %v", err)
+	}
+	if workers := mgr.ActiveWorkers(); workers != 1 {
+		t.Fatalf("expected 1 active worker, got %d", workers)
+	}
+
+	sess2, err := mgr.AcquireSession(context.Background(), time.Second)
+	if err != nil {
+		t.Fatalf("unexpected error acquiring session: %v", err)
+	}
+	if workers := mgr.ActiveWorkers(); workers != 2 {
+		t.Fatalf("expected 2 active workers, got %d", workers)
+	}
+
+	sess1.Cancel()
+	if workers := mgr.ActiveWorkers(); workers != 1 {
+		t.Fatalf("expected 1 active worker after cancel, got %d", workers)
+	}
+
+	sess2.Cancel()
+	if workers := mgr.ActiveWorkers(); workers != 0 {
+		t.Fatalf("expected 0 active workers after cancel, got %d", workers)
+	}
+
+	// Close the manager
+	if err := mgr.Close(); err != nil {
+		t.Fatalf("unexpected error closing manager: %v", err)
+	}
+
+	// New acquisitions must be rejected
+	_, err = mgr.AcquireSession(context.Background(), time.Second)
+	if !errors.Is(err, ErrBrowserClosed) {
+		t.Fatalf("expected ErrBrowserClosed after Close, got: %v", err)
+	}
+}

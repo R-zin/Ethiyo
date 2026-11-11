@@ -39,7 +39,7 @@ export function ErrorState({
             ? 'Transit Provider Timed Out'
             : 'Unable to Retrieve Telemetry'}
         </h2>
-        <p className="text-xs sm:text-sm text-nordic-600 dark:text-nordic-300 max-w-md mx-auto">
+        <p className="text-xs sm:text-sm text-nordic-700 dark:text-nordic-300 max-w-md mx-auto">
           {message}
         </p>
       </div>
@@ -47,14 +47,14 @@ export function ErrorState({
       {/* Helpful Guidance */}
       {isNotFound && onTryAlternative && (
         <div className="pt-2">
-          <p className="text-xs text-nordic-500 mb-2">Try one of these active test vehicles:</p>
+          <p className="text-xs text-nordic-600 dark:text-nordic-400 mb-2">Try one of these active test vehicles:</p>
           <div className="flex items-center justify-center gap-2">
             {['KS602', 'DL1PC0001', 'route_500'].map(alt => (
               <button
                 key={alt}
                 type="button"
                 onClick={() => onTryAlternative(alt)}
-                className="px-2.5 py-1 rounded bg-white dark:bg-nordic-900 border border-nordic-200 dark:border-nordic-800 text-xs font-mono text-frost-600 dark:text-frost-400 hover:border-frost-500 transition-colors"
+                className="px-2.5 py-1 rounded bg-white dark:bg-nordic-900 border border-nordic-200 dark:border-nordic-800 text-xs font-mono text-frost-700 dark:text-frost-400 hover:border-frost-500 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-frost-500"
               >
                 {alt}
               </button>
@@ -69,7 +69,7 @@ export function ErrorState({
           <button
             type="button"
             onClick={onRetry}
-            className="px-4 py-2 rounded-md bg-nordic-900 text-white dark:bg-frost-600 dark:hover:bg-frost-500 hover:bg-nordic-800 text-xs font-medium transition-colors flex items-center gap-2"
+            className="px-4 py-2 rounded-md bg-nordic-900 text-white dark:bg-frost-600 dark:hover:bg-frost-500 hover:bg-nordic-800 text-xs font-medium transition-colors flex items-center gap-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-frost-500 focus-visible:ring-offset-2"
           >
             <RefreshCw className="w-3.5 h-3.5" />
             <span>Retry Connection</span>

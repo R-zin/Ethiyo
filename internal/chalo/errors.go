@@ -17,4 +17,7 @@ var (
 
 	// ErrInvalidRouteURL is returned when an untrusted or malformed route URL is provided for fetching.
 	ErrInvalidRouteURL = errors.New("invalid route URL; must be a valid Chalo API endpoint")
+
+	// ErrScraperDisabled is returned when route discovery via scraping is disabled.
+	ErrScraperDisabled = errors.New("bus route scraper is disabled")
 )

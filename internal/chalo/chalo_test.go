@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"testing"
 	"time"
+
+	"github.com/R-zin/Ethiyo/internal/models"
 )
 
 // mockHTTPClient implements HTTPClient interface for testing.
@@ -524,5 +526,145 @@ func TestChaloService(t *testing.T) {
 	data, err := svc.FetchRouteDetails(context.Background(), "https://chalo.com/app/api/route/test")
 	if err != nil || string(data) != `{"status":"active"}` {
 		t.Errorf("expected valid data from FetchRouteDetails, got %s, err %v", string(data), err)
+	}
+}
+
+func TestRouteCacheOperations(t *testing.T) {
+	cache := NewRouteCache(50*time.Millisecond, 50*time.Millisecond)
+
+	// Case 1: Route caching and TTL expiration
+	route := &models.BusRouteInfo{
+		BusCode:     "DL1PC1234",
+		TrackingURL: "https://chalo.com/track/1234",
+		RouteURL:    "https://chalo.com/route/1234",
+	}
+
+	if _, ok := cache.GetRoute("DL1PC1234"); ok {
+		t.Fatalf("expected cache miss initially")
+	}
+
+	cache.SetRoute("DL1PC1234", route)
+	cachedRoute, ok := cache.GetRoute("DL1PC1234")
+	if !ok || cachedRoute.RouteURL != route.RouteURL {
+		t.Fatalf("expected cache hit with matching route, got ok=%v, route=%v", ok, cachedRoute)
+	}
+
+	// Wait for TTL expiration
+	time.Sleep(60 * time.Millisecond)
+	if _, ok := cache.GetRoute("DL1PC1234"); ok {
+		t.Errorf("expected route cache entry to be expired")
+	}
+
+	// Case 2: Tracking caching and TTL expiration
+	tracking := &models.BusTrackingInfo{
+		BusCode:     "DL1PC5678",
+		TrackingURL: "https://chalo.com/track/5678",
+	}
+
+	if _, ok := cache.GetTracking("DL1PC5678"); ok {
+		t.Fatalf("expected tracking cache miss initially")
+	}
+
+	cache.SetTracking("DL1PC5678", tracking)
+	cachedTracking, ok := cache.GetTracking("DL1PC5678")
+	if !ok || cachedTracking.TrackingURL != tracking.TrackingURL {
+		t.Fatalf("expected cache hit with matching tracking info, got ok=%v", ok)
+	}
+
+	time.Sleep(60 * time.Millisecond)
+	if _, ok := cache.GetTracking("DL1PC5678"); ok {
+		t.Errorf("expected tracking cache entry to be expired")
+	}
+
+	// Case 3: Clear
+	cache.SetRoute("DL1PC1111", route, 1*time.Minute)
+	cache.SetTracking("DL1PC2222", tracking, 1*time.Minute)
+	cache.Clear()
+
+	if _, ok := cache.GetRoute("DL1PC1111"); ok {
+		t.Errorf("expected route to be cleared")
+	}
+	if _, ok := cache.GetTracking("DL1PC2222"); ok {
+		t.Errorf("expected tracking to be cleared")
+	}
+}
+
+func TestChaloServiceCacheIntegration(t *testing.T) {
+	callCount := 0
+	client := NewClient("https://chalo.com", 5*time.Second)
+	client.SetHTTPClient(&mockHTTPClient{
+		doFunc: func(req *http.Request) (*http.Response, error) {
+			callCount++
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(bytes.NewBufferString(livePayload)),
+			}, nil
+		},
+	})
+
+	svc := NewService(client, nil)
+
+	// First call should invoke upstream client
+	info1, err := svc.GetBusTracking(context.Background(), "KS602")
+	if err != nil {
+		t.Fatalf("GetBusTracking call 1 failed: %v", err)
+	}
+	if callCount != 1 {
+		t.Fatalf("expected callCount 1, got %d", callCount)
+	}
+
+	// Second call should hit the cache and not increment callCount
+	info2, err := svc.GetBusTracking(context.Background(), "KS602")
+	if err != nil {
+		t.Fatalf("GetBusTracking call 2 failed: %v", err)
+	}
+	if callCount != 1 {
+		t.Fatalf("expected callCount to remain 1 on cache hit, got %d", callCount)
+	}
+	if info1.BusCode != info2.BusCode {
+		t.Errorf("expected matching cached data")
+	}
+
+	// GetTrackingURL should also hit cached tracking
+	url, err := svc.GetTrackingURL(context.Background(), "KS602")
+	if err != nil {
+		t.Fatalf("GetTrackingURL failed: %v", err)
+	}
+	if callCount != 1 {
+		t.Fatalf("expected callCount to remain 1 when GetTrackingURL uses cache, got %d", callCount)
+	}
+	if url != info1.TrackingURL {
+		t.Errorf("expected matching tracking URL: %q vs %q", url, info1.TrackingURL)
+	}
+}
+
+func TestChaloServiceScraperDisabled(t *testing.T) {
+	client := NewClient("https://chalo.com", 5*time.Second)
+	svc := NewService(client, nil, WithScraperEnabled(false))
+
+	if svc.ScraperEnabled() {
+		t.Errorf("expected ScraperEnabled to be false")
+	}
+
+	// When scraper is disabled, GetBusRoute must return ErrScraperDisabled
+	_, err := svc.GetBusRoute(context.Background(), "DL1PC1234")
+	if !errors.Is(err, ErrScraperDisabled) {
+		t.Fatalf("expected ErrScraperDisabled when scraper is disabled, got: %v", err)
+	}
+
+	// But if route is already cached, it should return cached route even if scraper is disabled
+	route := &models.BusRouteInfo{
+		BusCode:     "DL1PC1234",
+		TrackingURL: "https://chalo.com/track/1234",
+		RouteURL:    "https://chalo.com/route/1234",
+	}
+	svc.Cache().SetRoute("DL1PC1234", route)
+
+	cached, err := svc.GetBusRoute(context.Background(), "DL1PC1234")
+	if err != nil {
+		t.Fatalf("unexpected error fetching cached route: %v", err)
+	}
+	if cached.RouteURL != route.RouteURL {
+		t.Errorf("expected route %q, got %q", route.RouteURL, cached.RouteURL)
 	}
 }

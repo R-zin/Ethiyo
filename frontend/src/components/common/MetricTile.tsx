@@ -30,9 +30,9 @@ export function MetricTile({
         className
       )}
     >
-      <div className="flex items-center justify-between text-nordic-500 dark:text-nordic-400 mb-1.5">
+      <div className="flex items-center justify-between text-nordic-600 dark:text-nordic-400 mb-1.5">
         <span className="text-xs font-medium uppercase tracking-wider">{label}</span>
-        {icon && <span className="text-nordic-400 dark:text-nordic-500">{icon}</span>}
+        {icon && <span className="text-nordic-500 dark:text-nordic-400">{icon}</span>}
       </div>
 
       <div className="flex items-baseline gap-1.5">
@@ -40,14 +40,14 @@ export function MetricTile({
           {value}
         </span>
         {unit && (
-          <span className="text-xs font-medium text-nordic-500 dark:text-nordic-400">
+          <span className="text-xs font-medium text-nordic-600 dark:text-nordic-400">
             {unit}
           </span>
         )}
       </div>
 
       {subtext && (
-        <p className="mt-1 text-xs text-nordic-500 dark:text-nordic-400 truncate">
+        <p className="mt-1 text-xs text-nordic-600 dark:text-nordic-400 truncate">
           {subtext}
         </p>
       )}
