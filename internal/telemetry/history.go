@@ -1,6 +1,7 @@
 package telemetry
 
 import (
+	"math"
 	"sync"
 	"time"
 
@@ -75,7 +76,7 @@ func (h *History) Record(busCode string, fix models.PositionFix) *float64 {
 			return copyHeading(t.heading)
 		}
 		if HaversineMeters(last.Latitude, last.Longitude, fix.Latitude, fix.Longitude) >= MinMovementMeters {
-			hd := BearingDegrees(last.Latitude, last.Longitude, fix.Latitude, fix.Longitude)
+			hd := roundHeading(BearingDegrees(last.Latitude, last.Longitude, fix.Latitude, fix.Longitude))
 			t.heading = &hd
 		}
 	}
@@ -141,6 +142,16 @@ func (h *History) evictOldestLocked() {
 	if found {
 		delete(h.buses, oldestKey)
 	}
+}
+
+// roundHeading rounds to 0.1° (far finer than GPS-derived bearings are
+// accurate) and keeps the result in [0, 360).
+func roundHeading(deg float64) float64 {
+	r := math.Round(deg*10) / 10
+	if r >= 360 {
+		r -= 360
+	}
+	return r
 }
 
 func copyHeading(h *float64) *float64 {

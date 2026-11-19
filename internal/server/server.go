@@ -163,8 +163,12 @@ func New(cfg *config.Config) (*Server, error) {
 		Handler:           engine,
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       cfg.RequestTimeout + 5*time.Second,
-		WriteTimeout:      cfg.BrowserTimeout + 5*time.Second,
-		IdleTimeout:       60 * time.Second,
+		// A browser request may wait up to BrowserTimeout for a free slot and
+		// then run for up to BrowserTimeout; the write deadline must cover
+		// both or slow-but-successful discoveries get their connection cut.
+		// (Live streams manage their own per-write deadlines.)
+		WriteTimeout: 2*cfg.BrowserTimeout + 5*time.Second,
+		IdleTimeout:  60 * time.Second,
 	}
 	// End live streams as soon as shutdown begins; otherwise Shutdown would
 	// wait the full grace period for long-lived SSE connections to go idle.

@@ -161,3 +161,12 @@ func TestHistoryConcurrentUse(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+func TestRoundHeading(t *testing.T) {
+	cases := map[float64]float64{89.99991247970871: 90, 359.96: 0, 0.04: 0, 123.456: 123.5}
+	for in, want := range cases {
+		if got := roundHeading(in); got != want {
+			t.Errorf("roundHeading(%v) = %v, want %v", in, got, want)
+		}
+	}
+}

@@ -1,3 +1,5 @@
+import colors from 'tailwindcss/colors'
+
 /** @type {import('tailwindcss').Config} */
 export default {
   content: [
@@ -21,32 +23,13 @@ export default {
           900: '#0F172A',
           950: '#090D16',
         },
-        frost: {
-          50: '#F0F9FF',
-          100: '#E0F2FE',
-          200: '#BAE6FD',
-          300: '#7DD3FC',
-          400: '#38BDF8',
-          500: '#0EA5E9',
-          600: '#0284C7',
-          700: '#0369A1',
-          800: '#075985',
-          900: '#0C4A6E',
-        },
-        pine: {
-          50: '#ECFDF5',
-          100: '#D1FAE5',
-          500: '#10B981',
-          600: '#059669',
-          700: '#047857',
-        },
-        berry: {
-          50: '#FFF1F2',
-          100: '#FFE4E6',
-          500: '#F43F5E',
-          600: '#E11D48',
-          700: '#BE123C',
-        },
+        // frost/pine/berry are exactly Tailwind's sky/emerald/rose. Using the
+        // full scales matters: a partial palette makes classes such as
+        // dark:bg-frost-950/60 silently generate nothing, which broke the
+        // dark-mode styling of several components.
+        frost: colors.sky,
+        pine: colors.emerald,
+        berry: colors.rose,
         amber: {
           50: '#FFFBEB',
           500: '#F59E0B',

@@ -137,6 +137,10 @@ jobs:
       - name: Start backend server
         env:
           CHALO_BASE_URL: http://localhost:9099
+          # Fast cadence so the E2E suite observes streamed movement (heading
+          # arrow, breadcrumb trail) within seconds.
+          STREAM_POLL_INTERVAL: 2s
+          LIVE_CACHE_TTL: 1s
         run: |
           ./bin/server > backend.log 2>&1 &
           echo "BACKEND_PID=$!" >> $GITHUB_ENV

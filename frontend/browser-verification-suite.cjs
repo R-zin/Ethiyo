@@ -38,9 +38,7 @@ function findBrowser() {
 const BROWSER_BIN = findBrowser();
 const APP_URL = process.env.APP_URL || 'http://localhost:3000';
 
-const DEFAULT_ARTIFACT_DIR = '/Users/razinm/.gemini/antigravity-cli/brain/6f51d19b-4d76-45db-adb4-045f3bf0afd8/screenshots';
-const SCREENSHOT_DIR = process.env.SCREENSHOT_DIR ||
-  (fs.existsSync(path.dirname(DEFAULT_ARTIFACT_DIR)) ? DEFAULT_ARTIFACT_DIR : path.join(__dirname, 'screenshots'));
+const SCREENSHOT_DIR = process.env.SCREENSHOT_DIR || path.join(__dirname, 'screenshots');
 
 if (!fs.existsSync(SCREENSHOT_DIR)) {
   fs.mkdirSync(SCREENSHOT_DIR, { recursive: true });
@@ -94,6 +92,12 @@ async function runVerification() {
       if (isExpected404) {
         return;
       }
+      // Third-party map tiles may be unreachable from sandboxed runners;
+      // that is an environment limitation, not an application error.
+      const sourceUrl = (msg.location && msg.location().url) || '';
+      if (sourceUrl.includes('tile.openstreetmap.org')) {
+        return;
+      }
 
       if (type === 'error' || type === 'warn') {
         report.cleanConsole = false;
@@ -134,6 +138,11 @@ async function runVerification() {
         });
       }
     });
+
+    // Grant geolocation for the "How far is my bus?" feature, placing the
+    // viewer ~3 km south of the mock KS602 route.
+    await browser.defaultBrowserContext().overridePermissions(APP_URL, ['geolocation']);
+    await page.setGeolocation({ latitude: 11.1789, longitude: 75.8115, accuracy: 10 });
 
     // Force initial light theme via evaluateOnNewDocument
     await page.evaluateOnNewDocument(() => {
@@ -211,20 +220,86 @@ async function runVerification() {
     });
 
     if (presetClicked) {
-      console.log('Clicked preset chip KS602. Waiting for network response and DOM update...');
-      await page.waitForSelector('.tabular-nums, [data-testid="error-state"], [role="alert"], .leaflet-container', { timeout: 15000 });
-      await new Promise(r => setTimeout(r, 1200));
+      console.log('Clicked preset chip KS602. Waiting for the live tracking card...');
+      // Wait for the tracking card specifically: an error alert must NOT
+      // count as "rendered" (it used to, which hid a broken API contract).
+      await page.waitForSelector('[data-testid="connection-mode"], [role="alert"]', { timeout: 20000 });
 
-      const trackingCardPresent = await page.evaluate(() => {
-        return !!document.querySelector('.tabular-nums, [data-testid="error-state"], [role="alert"]');
+      const liveCard = await page.evaluate(() => {
+        const tiles = Array.from(document.querySelectorAll('.tabular-nums')).map(n => n.textContent.trim());
+        return {
+          hasCard: !!document.querySelector('[data-testid="connection-mode"]'),
+          hasError: !!document.querySelector('[data-testid="error-state"]'),
+          tiles,
+          body: document.body.innerText,
+        };
       });
-      console.log('Live tracker metrics rendered:', trackingCardPresent);
-      report.interactions.presetSearch = { busCode: 'KS602', rendered: trackingCardPresent };
+      // The mock reports 28.5 km/h; seeing "29 km/h" proves the UI reads the
+      // API's real field names end to end.
+      const speedRendered = liveCard.tiles.includes('29 km/h');
+      const stopsRendered = liveCard.body.includes('From: HSR Layout');
+      console.log('Live tracker card:', { hasCard: liveCard.hasCard, hasError: liveCard.hasError, tiles: liveCard.tiles });
+      console.log('Speed from API rendered (29 km/h):', speedRendered, '| previous stop rendered:', stopsRendered);
+
+      // Server-sent events: the connection pill should reach "live".
+      let streamLive = false;
+      try {
+        await page.waitForSelector('[data-testid="connection-mode"][data-mode="live"]', { timeout: 15000 });
+        streamLive = true;
+      } catch (e) {
+        const mode = await page.evaluate(() => document.querySelector('[data-testid="connection-mode"]')?.getAttribute('data-mode'));
+        console.warn('SSE stream did not reach live mode; current mode:', mode);
+      }
+      console.log('SSE live stream connected:', streamLive);
+
+      // Motion intelligence: as the mock bus moves, a heading arrow and a
+      // breadcrumb trail must appear on the map.
+      let motionRendered = false;
+      try {
+        await page.waitForSelector('.custom-bus-marker .bus-heading', { timeout: 25000 });
+        await page.waitForSelector('path.bus-trail', { timeout: 10000 });
+        motionRendered = true;
+      } catch (e) {
+        console.warn('Heading arrow / trail did not appear in time');
+      }
+      const heading = await page.evaluate(() => document.querySelector('.bus-heading')?.getAttribute('data-heading'));
+      console.log('Heading arrow + trail rendered:', motionRendered, '| heading:', heading);
+
+      report.interactions.presetSearch = {
+        busCode: 'KS602',
+        rendered: liveCard.hasCard && !liveCard.hasError && speedRendered && stopsRendered,
+        speedRendered,
+        stopsRendered,
+      };
+      report.interactions.liveStream = { connected: streamLive };
+      report.interactions.motion = { rendered: motionRendered, heading };
 
       const shot3 = path.join(SCREENSHOT_DIR, '03-desktop-tracked-ks602.png');
       await page.screenshot({ path: shot3, fullPage: true });
       report.screenshots.push({ name: '03-desktop-tracked-ks602.png', path: shot3, label: 'Desktop Live Tracking Card & Leaflet Map (KS602)' });
       console.log('Captured:', shot3);
+
+      // "How far is my bus?" — geolocation-based distance and ETA.
+      console.log('\n[Step 3b] Testing "How far is my bus?" proximity feature...');
+      const locateClicked = await page.evaluate(() => {
+        const btn = Array.from(document.querySelectorAll('button')).find(b => b.textContent.includes('Use my location'));
+        if (btn) btn.click();
+        return !!btn;
+      });
+      let proximityText = null;
+      if (locateClicked) {
+        try {
+          await page.waitForSelector('[data-testid="proximity-result"]', { timeout: 10000 });
+          proximityText = await page.$eval('[data-testid="proximity-result"]', el => el.textContent);
+        } catch (e) {
+          console.warn('Proximity result did not render');
+        }
+      }
+      console.log('Proximity result:', proximityText);
+      report.interactions.proximity = {
+        rendered: !!proximityText && /km away/.test(proximityText) && /min at current speed/.test(proximityText),
+        text: proximityText,
+      };
     }
 
     // ==========================================
@@ -241,8 +316,22 @@ async function runVerification() {
     });
 
     if (tabClicked) {
-      console.log('Clicked Route Endpoints tab. Waiting for DOM update...');
-      await new Promise(r => setTimeout(r, 800));
+      console.log('Clicked Route Endpoints tab. Waiting for headless-browser route discovery...');
+      let routeUrl = null;
+      try {
+        await page.waitForSelector('[data-testid="route-endpoints"], [data-testid="route-error"]', { timeout: 45000 });
+        routeUrl = await page.evaluate(() => {
+          const input = document.querySelector('input[aria-label="Scheduler Live Route URL"]');
+          return input ? input.value : null;
+        });
+      } catch (e) {
+        console.warn('Route panel did not settle in time');
+      }
+      console.log('Discovered route URL:', routeUrl);
+      report.interactions.routeDiscovery = {
+        discovered: !!routeUrl && routeUrl.includes('/routedetailslive'),
+        routeUrl,
+      };
 
       const tabActive = await page.evaluate(() => {
         const tab = document.getElementById('tab-route');
@@ -292,7 +381,12 @@ async function runVerification() {
         return heading ? heading.textContent : null;
       });
       console.log('Error state alert heading:', errorHeading);
-      report.interactions.errorState = { renderedHeading: errorHeading };
+      // Chalo answers unknown buses with HTTP 202 + an error body; the API
+      // must still translate that into a clear "not found".
+      report.interactions.errorState = {
+        renderedHeading: errorHeading,
+        isNotFound: !!errorHeading && errorHeading.includes('Not Found'),
+      };
 
       const shot5 = path.join(SCREENSHOT_DIR, '05-desktop-error-state.png');
       await page.screenshot({ path: shot5, fullPage: true });
@@ -376,11 +470,23 @@ async function runVerification() {
     console.log('Verification report written to:', reportPath);
 
     // Assertions for CI exit code
-    const hasFailures =
-      !report.cleanConsole ||
-      !report.interactions.presetSearch?.rendered ||
-      !report.interactions.errorState?.renderedHeading ||
-      Object.values(report.responsiveChecks).some(c => c.hasHorizontalScroll);
+    const checks = {
+      cleanConsole: report.cleanConsole,
+      liveDataRendered: !!report.interactions.presetSearch?.rendered,
+      sseStreamConnected: !!report.interactions.liveStream?.connected,
+      headingAndTrail: !!report.interactions.motion?.rendered,
+      proximity: !!report.interactions.proximity?.rendered,
+      routeDiscovery: !!report.interactions.routeDiscovery?.discovered,
+      notFoundError: !!report.interactions.errorState?.isNotFound,
+      noHorizontalScroll: !Object.values(report.responsiveChecks).some(c => c.hasHorizontalScroll),
+    };
+    report.checks = checks;
+    fs.writeFileSync(reportPath, JSON.stringify(report, null, 2));
+    console.log('\nCriteria:');
+    for (const [name, ok] of Object.entries(checks)) {
+      console.log(`  ${ok ? 'PASS' : 'FAIL'}  ${name}`);
+    }
+    const hasFailures = Object.values(checks).some(ok => !ok);
 
     if (hasFailures) {
       console.error('\n❌ E2E VERIFICATION SUITE FAILED CRITICAL ASSERTIONS');
