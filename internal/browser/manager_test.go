@@ -144,3 +144,52 @@ func TestAcquireAndReleaseCycle(t *testing.T) {
 	}
 	sess2.Cancel()
 }
+
+// TestAcquireSessionBoundedWait is a regression test: request contexts carry
+// no deadline, so waiting for a saturated pool used to block until the client
+// disconnected. The wait must be bounded by the operation timeout.
+func TestAcquireSessionBoundedWait(t *testing.T) {
+	mgr := NewManager("", true, 5*time.Second, 1)
+	held, err := mgr.AcquireSession(context.Background(), time.Second)
+	if err != nil {
+		t.Fatalf("acquire: %v", err)
+	}
+	defer held.Cancel()
+
+	done := make(chan error, 1)
+	start := time.Now()
+	go func() {
+		_, err := mgr.AcquireSession(context.Background(), 100*time.Millisecond)
+		done <- err
+	}()
+
+	select {
+	case err := <-done:
+		if !errors.Is(err, ErrConcurrencyLimitReached) {
+			t.Fatalf("expected ErrConcurrencyLimitReached, got %v", err)
+		}
+		if elapsed := time.Since(start); elapsed > 2*time.Second {
+			t.Errorf("bounded wait took too long: %v", elapsed)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("AcquireSession blocked indefinitely on a saturated pool")
+	}
+}
+
+func TestManagerReportsUtilization(t *testing.T) {
+	mgr := NewManager("", true, 5*time.Second, 3)
+	if mgr.Capacity() != 3 || mgr.InUse() != 0 {
+		t.Fatalf("capacity/inUse = %d/%d, want 3/0", mgr.Capacity(), mgr.InUse())
+	}
+	sess, err := mgr.AcquireSession(context.Background(), time.Second)
+	if err != nil {
+		t.Fatalf("acquire: %v", err)
+	}
+	if mgr.InUse() != 1 {
+		t.Errorf("InUse after acquire = %d, want 1", mgr.InUse())
+	}
+	sess.Cancel()
+	if mgr.InUse() != 0 {
+		t.Errorf("InUse after release = %d, want 0", mgr.InUse())
+	}
+}

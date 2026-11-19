@@ -49,19 +49,39 @@ func (s *Scraper) runWithTimeout(ctx context.Context, timeout time.Duration, fn 
 	return fn(tctx)
 }
 
+// discoveryTarget selects which intercepted endpoint completes discovery.
+type discoveryTarget int
+
+const (
+	// targetRoute waits for the scheduler routedetailslive XHR — the only
+	// endpoint Chalo's current public route pages still emit.
+	targetRoute discoveryTarget = iota
+	// targetTrack waits for the legacy vasudha route-live-info XHR.
+	targetTrack
+)
+
 // discoveredURLs collects intercepted network request URLs matching the
-// track/route patterns, and signals when discovery requirements are met.
+// track/route patterns, and signals once the target endpoint is observed.
 type discoveredURLs struct {
-	mu       sync.Mutex
-	track    string
-	route    string
-	done     chan struct{}
-	once     sync.Once
-	needBoth bool
+	mu     sync.Mutex
+	track  string
+	route  string
+	done   chan struct{}
+	once   sync.Once
+	target discoveryTarget
 }
 
-func newDiscoveredURLs(needBoth bool) *discoveredURLs {
-	return &discoveredURLs{done: make(chan struct{}), needBoth: needBoth}
+func newDiscoveredURLs(target discoveryTarget) *discoveredURLs {
+	return &discoveredURLs{done: make(chan struct{}), target: target}
+}
+
+// completeLocked reports whether the target endpoint has been captured.
+// Callers must hold d.mu.
+func (d *discoveredURLs) completeLocked() bool {
+	if d.target == targetTrack {
+		return d.track != ""
+	}
+	return d.route != ""
 }
 
 // handle records a network event, returning true if discovery is complete.
@@ -75,7 +95,7 @@ func (d *discoveredURLs) handle(ev *network.EventRequestWillBeSent) bool {
 	if d.route == "" && RouteURLRegex.MatchString(reqURL) {
 		d.route = reqURL
 	}
-	complete := d.track != "" && (!d.needBoth || d.route != "")
+	complete := d.completeLocked()
 	d.mu.Unlock()
 
 	if complete {
@@ -84,16 +104,17 @@ func (d *discoveredURLs) handle(ev *network.EventRequestWillBeSent) bool {
 	return complete
 }
 
-// results snapshots the discovered URLs.
-func (d *discoveredURLs) results() (track, route string) {
+// results snapshots the discovered URLs and whether the target was captured.
+func (d *discoveredURLs) results() (track, route string, complete bool) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	return d.track, d.route
+	return d.track, d.route, d.completeLocked()
 }
 
-// discover navigates to the public route page and intercepts network requests,
-// collecting the live-tracking URL and (when needBoth) the scheduler route URL.
-func (s *Scraper) discover(ctx context.Context, busCode string, needBoth bool) (trackURL, routeURL string, err error) {
+// discover navigates to the public route page and intercepts network requests
+// until the target endpoint is observed. Any other matching endpoint seen on
+// the way is returned too, but is not required.
+func (s *Scraper) discover(ctx context.Context, busCode string, target discoveryTarget) (trackURL, routeURL string, err error) {
 	// A caller-canceled context must surface as context.Canceled, not a
 	// wrapped concurrency error, so handlers can map it correctly.
 	if err := ctx.Err(); err != nil {
@@ -112,7 +133,7 @@ func (s *Scraper) discover(ctx context.Context, busCode string, needBoth bool) (
 		return "", "", fmt.Errorf("failed to enable browser network tracking: %w", err)
 	}
 
-	found := newDiscoveredURLs(needBoth)
+	found := newDiscoveredURLs(target)
 	chromedp.ListenTarget(browserCtx, func(ev interface{}) {
 		req, ok := ev.(*network.EventRequestWillBeSent)
 		if !ok {
@@ -140,21 +161,21 @@ func (s *Scraper) discover(ctx context.Context, busCode string, needBoth bool) (
 
 	select {
 	case <-found.done:
-		t, r := found.results()
+		t, r, _ := found.results()
 		return t, r, nil
 	case <-browserCtx.Done():
 		if errors.Is(ctx.Err(), context.Canceled) {
 			return "", "", context.Canceled
 		}
-		t, r := found.results()
-		if t != "" && (!needBoth || r != "") {
-			// Everything required was captured just as the deadline hit.
+		t, r, complete := found.results()
+		if complete {
+			// The target was captured just as the deadline hit.
 			return t, r, nil
 		}
 		if t != "" || r != "" {
-			// Partial discovery: at least one endpoint was observed, so the
-			// page is live but the full endpoint pair never appeared. That is
-			// a discovery failure, not a transport timeout.
+			// Partial discovery: the page is live and emitted a Chalo API
+			// call, but never the one we need. That is a discovery failure,
+			// not a transport timeout.
 			slog.Warn("partial route discovery",
 				"bus_code", busCode, "track_url", t, "route_url", r)
 			return t, r, ErrDiscoveryFailed
@@ -163,14 +184,18 @@ func (s *Scraper) discover(ctx context.Context, busCode string, needBoth bool) (
 	}
 }
 
-// DiscoverRoutes navigates to Chalo's public route page and intercepts both the live tracking URL
-// and the scheduler route details URL.
+// DiscoverRoutes navigates to Chalo's public route page and intercepts the
+// scheduler route details URL. trackURL is only populated if the page also
+// happened to emit the legacy route-live-info XHR; it is never required,
+// because Chalo's current pages no longer emit it (live tracking uses the
+// deterministic chatbot/raw endpoint instead — see Client.LiveTrackingURL).
 func (s *Scraper) DiscoverRoutes(ctx context.Context, busCode string) (trackURL string, routeURL string, err error) {
-	return s.discover(ctx, busCode, true)
+	return s.discover(ctx, busCode, targetRoute)
 }
 
-// DiscoverTrackURL navigates to the public route page and returns the live tracking URL only.
+// DiscoverTrackURL navigates to the public route page and returns the legacy
+// route-live-info tracking URL. Retained for older Chalo deployments.
 func (s *Scraper) DiscoverTrackURL(ctx context.Context, busCode string) (string, error) {
-	trackURL, _, err := s.discover(ctx, busCode, false)
+	trackURL, _, err := s.discover(ctx, busCode, targetTrack)
 	return trackURL, err
 }

@@ -83,6 +83,24 @@ func (h *BusHandler) GetURL(c *gin.Context) {
 	}))
 }
 
+// History returns the recent breadcrumb trail of a bus.
+// GET /api/v1/bus/:buscode/history
+func (h *BusHandler) History(c *gin.Context) {
+	validCode, err := models.ValidateBusCode(c.Param("buscode"))
+	if err != nil {
+		HandleError(c, err)
+		return
+	}
+
+	history, err := h.service.GetBusHistory(c.Request.Context(), validCode)
+	if err != nil {
+		HandleError(c, err)
+		return
+	}
+
+	c.JSON(http.StatusOK, models.NewSuccessResponse(history))
+}
+
 // --- Legacy Backward-Compatible Endpoints ---
 
 // LegacyTrackRoute handles the deprecated /trackroute endpoint.

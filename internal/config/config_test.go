@@ -165,3 +165,62 @@ func TestInvalidEnvValuesFallBackToDefaults(t *testing.T) {
 		t.Errorf("bad bool should fall back to true")
 	}
 }
+
+func TestLoadNewFeatureDefaultsAndOverrides(t *testing.T) {
+	for _, k := range []string{"LIVE_CACHE_TTL", "ROUTE_CACHE_TTL", "STREAM_POLL_INTERVAL",
+		"STREAM_MAX_CLIENTS", "STREAM_HEARTBEAT", "STREAM_MAX_LIFETIME", "METRICS_ENABLED"} {
+		t.Setenv(k, "")
+	}
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.LiveCacheTTL != 5*time.Second || cfg.RouteCacheTTL != 10*time.Minute {
+		t.Errorf("cache TTL defaults = %v/%v", cfg.LiveCacheTTL, cfg.RouteCacheTTL)
+	}
+	if cfg.StreamPollInterval != 10*time.Second || cfg.StreamMaxClients != 500 ||
+		cfg.StreamHeartbeat != 15*time.Second || cfg.StreamMaxLifetime != 30*time.Minute {
+		t.Errorf("stream defaults = %v/%d/%v/%v", cfg.StreamPollInterval, cfg.StreamMaxClients, cfg.StreamHeartbeat, cfg.StreamMaxLifetime)
+	}
+	if !cfg.MetricsEnabled {
+		t.Error("metrics should be enabled by default")
+	}
+
+	t.Setenv("LIVE_CACHE_TTL", "0s") // explicit disable is valid
+	t.Setenv("STREAM_MAX_CLIENTS", "42")
+	t.Setenv("METRICS_ENABLED", "false")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatalf("Load overrides: %v", err)
+	}
+	if cfg.LiveCacheTTL != 0 || cfg.StreamMaxClients != 42 || cfg.MetricsEnabled {
+		t.Errorf("overrides not applied: ttl=%v max=%d metrics=%v", cfg.LiveCacheTTL, cfg.StreamMaxClients, cfg.MetricsEnabled)
+	}
+}
+
+func TestValidateRejectsInvalidFeatureSettings(t *testing.T) {
+	base := func() *Config {
+		return &Config{Port: "8080", BrowserMaxConcurrency: 1, RequestTimeout: time.Second,
+			BrowserTimeout: time.Second, RateLimitRPS: 1, RateLimitBurst: 1,
+			StreamPollInterval: time.Second, StreamMaxClients: 1,
+			StreamHeartbeat: time.Second, StreamMaxLifetime: time.Minute}
+	}
+	if err := base().Validate(); err != nil {
+		t.Fatalf("valid base config rejected: %v", err)
+	}
+	mutations := map[string]func(*Config){
+		"negative live ttl":  func(c *Config) { c.LiveCacheTTL = -time.Second },
+		"negative route ttl": func(c *Config) { c.RouteCacheTTL = -time.Second },
+		"zero poll interval": func(c *Config) { c.StreamPollInterval = 0 },
+		"zero max clients":   func(c *Config) { c.StreamMaxClients = 0 },
+		"zero heartbeat":     func(c *Config) { c.StreamHeartbeat = 0 },
+		"zero lifetime":      func(c *Config) { c.StreamMaxLifetime = 0 },
+	}
+	for name, mutate := range mutations {
+		c := base()
+		mutate(c)
+		if err := c.Validate(); err == nil {
+			t.Errorf("%s: expected validation error", name)
+		}
+	}
+}

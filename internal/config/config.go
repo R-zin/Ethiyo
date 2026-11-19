@@ -4,6 +4,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"log/slog"
 	"os"
 	"strconv"
 	"strings"
@@ -36,6 +37,19 @@ type Config struct {
 	CORSAllowedOrigins []string
 	RateLimitRPS       float64
 	RateLimitBurst     int
+
+	// Caching settings (0 disables storage; concurrent requests still coalesce)
+	LiveCacheTTL  time.Duration
+	RouteCacheTTL time.Duration
+
+	// Live streaming (server-sent events) settings
+	StreamPollInterval time.Duration
+	StreamMaxClients   int
+	StreamHeartbeat    time.Duration
+	StreamMaxLifetime  time.Duration
+
+	// Observability
+	MetricsEnabled bool
 }
 
 // Load reads configuration from environment variables with safe defaults.
@@ -55,6 +69,13 @@ func Load() (*Config, error) {
 		OAuthStateSecret:      getEnv("OAUTH_STATE_SECRET", ""),
 		RateLimitRPS:          getFloatEnv("RATE_LIMIT_RPS", 10.0),
 		RateLimitBurst:        getIntEnv("RATE_LIMIT_BURST", 20),
+		LiveCacheTTL:          getDurationEnv("LIVE_CACHE_TTL", 5*time.Second),
+		RouteCacheTTL:         getDurationEnv("ROUTE_CACHE_TTL", 10*time.Minute),
+		StreamPollInterval:    getDurationEnv("STREAM_POLL_INTERVAL", 10*time.Second),
+		StreamMaxClients:      getIntEnv("STREAM_MAX_CLIENTS", 500),
+		StreamHeartbeat:       getDurationEnv("STREAM_HEARTBEAT", 15*time.Second),
+		StreamMaxLifetime:     getDurationEnv("STREAM_MAX_LIFETIME", 30*time.Minute),
+		MetricsEnabled:        getBoolEnv("METRICS_ENABLED", true),
 	}
 
 	origins := getEnv("CORS_ALLOWED_ORIGINS", "*")
@@ -99,6 +120,18 @@ func (c *Config) Validate() error {
 	if c.RateLimitBurst <= 0 {
 		return fmt.Errorf("RATE_LIMIT_BURST must be positive")
 	}
+	if c.LiveCacheTTL < 0 || c.RouteCacheTTL < 0 {
+		return fmt.Errorf("LIVE_CACHE_TTL and ROUTE_CACHE_TTL must not be negative")
+	}
+	if c.StreamPollInterval <= 0 {
+		return fmt.Errorf("STREAM_POLL_INTERVAL must be positive")
+	}
+	if c.StreamMaxClients <= 0 {
+		return fmt.Errorf("STREAM_MAX_CLIENTS must be greater than 0")
+	}
+	if c.StreamHeartbeat <= 0 || c.StreamMaxLifetime <= 0 {
+		return fmt.Errorf("STREAM_HEARTBEAT and STREAM_MAX_LIFETIME must be positive")
+	}
 	return nil
 }
 
@@ -122,6 +155,7 @@ func getBoolEnv(key string, defaultVal bool) bool {
 	}
 	b, err := strconv.ParseBool(strings.TrimSpace(val))
 	if err != nil {
+		warnInvalid(key, val, defaultVal)
 		return defaultVal
 	}
 	return b
@@ -134,6 +168,7 @@ func getIntEnv(key string, defaultVal int) int {
 	}
 	n, err := strconv.Atoi(strings.TrimSpace(val))
 	if err != nil {
+		warnInvalid(key, val, defaultVal)
 		return defaultVal
 	}
 	return n
@@ -146,6 +181,7 @@ func getFloatEnv(key string, defaultVal float64) float64 {
 	}
 	f, err := strconv.ParseFloat(strings.TrimSpace(val), 64)
 	if err != nil {
+		warnInvalid(key, val, defaultVal)
 		return defaultVal
 	}
 	return f
@@ -158,7 +194,14 @@ func getDurationEnv(key string, defaultVal time.Duration) time.Duration {
 	}
 	d, err := time.ParseDuration(strings.TrimSpace(val))
 	if err != nil {
+		warnInvalid(key, val, defaultVal)
 		return defaultVal
 	}
 	return d
+}
+
+// warnInvalid reports an unparseable setting. Falling back silently would
+// let a typo (e.g. RATE_LIMIT_RPS=1O) quietly change production behavior.
+func warnInvalid(key, val string, defaultVal any) {
+	slog.Warn("invalid environment value; using default", "key", key, "value", val, "default", fmt.Sprint(defaultVal))
 }

@@ -25,6 +25,7 @@ type mockChaloService struct {
 	getTrackingURLFunc    func(ctx context.Context, busCode string) (string, error)
 	getBusTrackingFunc    func(ctx context.Context, busCode string) (*models.BusTrackingInfo, error)
 	getBusRouteFunc       func(ctx context.Context, busCode string) (*models.BusRouteInfo, error)
+	getBusHistoryFunc     func(ctx context.Context, busCode string) (*models.BusHistory, error)
 	fetchRouteDetailsFunc func(ctx context.Context, routeURL string) ([]byte, error)
 	fetchPublicRouteFunc  func(ctx context.Context, busCode string) (int, error)
 }
@@ -57,6 +58,13 @@ func (m *mockChaloService) GetBusRoute(ctx context.Context, busCode string) (*mo
 	}, nil
 }
 
+func (m *mockChaloService) GetBusHistory(ctx context.Context, busCode string) (*models.BusHistory, error) {
+	if m.getBusHistoryFunc != nil {
+		return m.getBusHistoryFunc(ctx, busCode)
+	}
+	return &models.BusHistory{BusCode: busCode, Points: []models.PositionFix{}}, nil
+}
+
 func (m *mockChaloService) FetchRouteDetails(ctx context.Context, routeURL string) ([]byte, error) {
 	if m.fetchRouteDetailsFunc != nil {
 		return m.fetchRouteDetailsFunc(ctx, routeURL)
@@ -85,6 +93,7 @@ func setupTestRouter(chaloSvc chalo.Service, authSvc auth.OAuthService) *gin.Eng
 		v1.GET("/bus/:buscode/track", busHandler.TrackBus)
 		v1.GET("/bus/:buscode/route", busHandler.RouteDetails)
 		v1.GET("/bus/:buscode/url", busHandler.GetURL)
+		v1.GET("/bus/:buscode/history", busHandler.History)
 	}
 
 	// Legacy routes
@@ -582,5 +591,52 @@ func TestV1GetURL(t *testing.T) {
 	}
 	if !res.Success {
 		t.Errorf("expected success true")
+	}
+}
+
+func TestV1History(t *testing.T) {
+	recorded := time.Unix(1_789_836_570, 0).UTC()
+	svc := &mockChaloService{
+		getBusHistoryFunc: func(ctx context.Context, busCode string) (*models.BusHistory, error) {
+			if busCode == "GONE1" {
+				return nil, chalo.ErrBusNotFound
+			}
+			return &models.BusHistory{
+				BusCode:        busCode,
+				Points:         []models.PositionFix{{Latitude: 10, Longitude: 76, Speed: 20, RecordedAt: recorded}},
+				DistanceMeters: 1234,
+			}, nil
+		},
+	}
+	r := setupTestRouter(svc, nil)
+
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/v1/bus/KS602/history", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, body %s", w.Code, w.Body.String())
+	}
+	var resp struct {
+		Success bool              `json:"success"`
+		Data    models.BusHistory `json:"data"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if !resp.Success || resp.Data.BusCode != "KS602" || len(resp.Data.Points) != 1 || resp.Data.DistanceMeters != 1234 {
+		t.Errorf("unexpected history payload: %+v", resp)
+	}
+	if !resp.Data.Points[0].RecordedAt.Equal(recorded) {
+		t.Errorf("recorded_at round-trip = %v, want %v", resp.Data.Points[0].RecordedAt, recorded)
+	}
+
+	for path, want := range map[string]int{
+		"/api/v1/bus/GONE1/history":     http.StatusNotFound,
+		"/api/v1/bus/bad$$code/history": http.StatusBadRequest,
+	} {
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, path, nil))
+		if w.Code != want {
+			t.Errorf("%s: status = %d, want %d", path, w.Code, want)
+		}
 	}
 }

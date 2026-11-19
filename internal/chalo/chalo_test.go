@@ -526,3 +526,32 @@ func TestChaloService(t *testing.T) {
 		t.Errorf("expected valid data from FetchRouteDetails, got %s, err %v", string(data), err)
 	}
 }
+
+// TestGetTrackingURLUnknownVehicleHTTP202 is a regression test: Chalo answers
+// unknown vehicles with HTTP 202 + an error body. GetTrackingURL used to skip
+// parsing and hand back a dead URL with 200 OK.
+func TestGetTrackingURLUnknownVehicleHTTP202(t *testing.T) {
+	client := NewClient("https://chalo.com", 5*time.Second)
+	client.SetHTTPClient(&mockHTTPClient{
+		doFunc: func(req *http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusAccepted,
+				Body:       io.NopCloser(bytes.NewBufferString(`{"error":"gps data is not present for ZZZZZ9 vehicle"}`)),
+			}, nil
+		},
+	})
+	svc := NewService(client, nil)
+
+	if _, err := svc.GetTrackingURL(context.Background(), "ZZZZZ9"); !errors.Is(err, ErrBusNotFound) {
+		t.Fatalf("expected ErrBusNotFound for unknown vehicle, got %v", err)
+	}
+}
+
+func TestLiveTrackingURLIsDeterministic(t *testing.T) {
+	client := NewClient("https://chalo.com/", 5*time.Second)
+	got := client.LiveTrackingURL("KS 602")
+	want := "https://chalo.com/app/api/dashboard/chatbot/raw?vehicleNo=KS+602"
+	if got != want {
+		t.Errorf("LiveTrackingURL = %q, want %q", got, want)
+	}
+}

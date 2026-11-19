@@ -124,7 +124,7 @@ func (c *Client) FetchRouteDetails(ctx context.Context, routeURL string) ([]byte
 // payload; callers decode what they need. A vehicle with no live data yields
 // ErrBusNotFound (Chalo signals this with HTTP 202 + an error body).
 func (c *Client) FetchLiveTracking(ctx context.Context, busCode string) ([]byte, string, error) {
-	trackURL := fmt.Sprintf("%s/app/api/dashboard/chatbot/raw?vehicleNo=%s", c.baseURL, url.QueryEscape(busCode))
+	trackURL := c.LiveTrackingURL(busCode)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, trackURL, nil)
 	if err != nil {
@@ -268,4 +268,9 @@ func isLoopbackHost(host string) bool {
 	}
 	ip := net.ParseIP(host)
 	return ip != nil && ip.IsLoopback()
+}
+
+// LiveTrackingURL returns Chalo's deterministic vehicle-tracking URL for a bus code.
+func (c *Client) LiveTrackingURL(busCode string) string {
+	return fmt.Sprintf("%s/app/api/dashboard/chatbot/raw?vehicleNo=%s", c.baseURL, url.QueryEscape(busCode))
 }

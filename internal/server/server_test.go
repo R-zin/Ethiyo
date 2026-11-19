@@ -1,8 +1,12 @@
 package server
 
 import (
+	"bufio"
+	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -203,5 +207,192 @@ func TestServerMiddlewareHeadersPresent(t *testing.T) {
 		if w.Header().Get(h) == "" {
 			t.Errorf("expected %s header on /health", h)
 		}
+	}
+}
+
+// newUpstreamMock serves Chalo's live-tracking endpoint (HTTP 202, as the
+// real service does) for any vehicle.
+func newUpstreamMock(t *testing.T) *httptest.Server {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusAccepted)
+		fmt.Fprintf(w, `{"gpsData":{"vehicleCode":"V1"},"sessionData":{"data":{"currentInfo":{"lt":10.5,"ln":76.2,"pSp":20,"tS":%d}}}}`,
+			time.Now().UnixMilli())
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func startForTest(t *testing.T, mutate func(*config.Config)) (*Server, string) {
+	t.Helper()
+	upstream := newUpstreamMock(t)
+	cfg := &config.Config{
+		Port:                  freePort(t),
+		Env:                   "test",
+		ChaloBaseURL:          upstream.URL,
+		RequestTimeout:        5 * time.Second,
+		BrowserTimeout:        5 * time.Second,
+		BrowserMaxConcurrency: 1,
+		RateLimitRPS:          10,
+		RateLimitBurst:        20,
+		CORSAllowedOrigins:    []string{"*"},
+		LiveCacheTTL:          time.Second,
+		StreamPollInterval:    50 * time.Millisecond,
+		StreamMaxClients:      10,
+		StreamHeartbeat:       time.Second,
+		StreamMaxLifetime:     time.Minute,
+		MetricsEnabled:        true,
+	}
+	if mutate != nil {
+		mutate(cfg)
+	}
+	srv, err := New(cfg)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	go func() { _ = srv.http.ListenAndServe() }()
+	base := "http://127.0.0.1:" + cfg.Port
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		resp, err := http.Get(base + "/health")
+		if err == nil {
+			resp.Body.Close()
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("server never became ready: %v", err)
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = srv.Shutdown(ctx)
+	})
+	return srv, base
+}
+
+// TestShutdownEndsLiveStreamsPromptly guards against long-lived SSE
+// connections stalling graceful shutdown for the whole grace period.
+func TestShutdownEndsLiveStreamsPromptly(t *testing.T) {
+	srv, base := startForTest(t, nil)
+
+	resp, err := http.Get(base + "/api/v1/bus/KS602/stream")
+	if err != nil {
+		t.Fatalf("open stream: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("stream status = %d", resp.StatusCode)
+	}
+	r := bufio.NewReader(resp.Body)
+	for {
+		line, err := r.ReadString('\n')
+		if err != nil {
+			t.Fatalf("reading stream: %v", err)
+		}
+		if strings.HasPrefix(line, "event: position") {
+			break
+		}
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	start := time.Now()
+	if err := srv.Shutdown(ctx); err != nil {
+		t.Fatalf("Shutdown: %v (a live stream blocked graceful shutdown)", err)
+	}
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Errorf("shutdown took %v with an open stream", elapsed)
+	}
+	if _, err := io.Copy(io.Discard, r); err != nil && !errors.Is(err, io.ErrUnexpectedEOF) {
+		t.Logf("stream ended with %v", err)
+	}
+}
+
+func TestMetricsEndpointExposesFeatureGauges(t *testing.T) {
+	_, base := startForTest(t, nil)
+
+	// Generate a cache miss then a hit.
+	for i := 0; i < 2; i++ {
+		resp, err := http.Get(base + "/api/v1/bus/KS602/track")
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+	}
+
+	resp, err := http.Get(base + "/metrics")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+	out := string(body)
+	for _, want := range []string{
+		`ethiyo_cache_requests_total{cache="live",result="hit"} 1`,
+		`ethiyo_cache_requests_total{cache="live",result="miss"} 1`,
+		`ethiyo_upstream_requests_total{op="live_tracking",outcome="success"} 1`,
+		`ethiyo_http_requests_total{method="GET",route="/api/v1/bus/:buscode/track",status="200"} 2`,
+		"ethiyo_stream_subscribers 0",
+		"ethiyo_browser_sessions_capacity 1",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("metrics missing %q", want)
+		}
+	}
+}
+
+func TestMetricsCanBeDisabled(t *testing.T) {
+	_, base := startForTest(t, func(c *config.Config) { c.MetricsEnabled = false })
+	resp, err := http.Get(base + "/metrics")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("/metrics with METRICS_ENABLED=false: status %d, want 404", resp.StatusCode)
+	}
+}
+
+func TestHealthProbesBypassRateLimit(t *testing.T) {
+	_, base := startForTest(t, func(c *config.Config) {
+		c.RateLimitRPS = 0.001
+		c.RateLimitBurst = 1
+	})
+	for i := 0; i < 5; i++ {
+		resp, err := http.Get(base + "/health")
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("health probe %d: status %d, want 200", i, resp.StatusCode)
+		}
+	}
+}
+
+func TestHistoryEndpointEndToEnd(t *testing.T) {
+	_, base := startForTest(t, nil)
+	resp, err := http.Get(base + "/api/v1/bus/KS602/history")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var body struct {
+		Success bool `json:"success"`
+		Data    struct {
+			BusCode string `json:"bus_code"`
+			Points  []struct {
+				Latitude float64 `json:"latitude"`
+			} `json:"points"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	if !body.Success || body.Data.BusCode != "KS602" || len(body.Data.Points) != 1 || body.Data.Points[0].Latitude != 10.5 {
+		t.Errorf("unexpected history response: %+v", body)
 	}
 }

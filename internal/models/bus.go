@@ -60,4 +60,30 @@ type BusLiveInfo struct {
 	PreviousStop string    `json:"previous_stop,omitempty"`
 	LiveTracking bool      `json:"live_tracking"`
 	TrackingURL  string    `json:"tracking_url"`
+
+	// Derived motion intelligence (computed by Ethiyo, not sent by Chalo).
+
+	// Heading is the direction of travel in degrees clockwise from true
+	// north, derived from successive positions. Omitted until the bus has
+	// been seen moving.
+	Heading *float64 `json:"heading,omitempty"`
+	// AgeSeconds is how long ago the position was recorded by the vehicle.
+	AgeSeconds float64 `json:"age_seconds"`
+	// Stale is true when the position is too old to be trusted as "live".
+	Stale bool `json:"stale"`
+}
+
+// PositionFix is a single recorded GPS position of a bus.
+type PositionFix struct {
+	Latitude   float64   `json:"latitude"`
+	Longitude  float64   `json:"longitude"`
+	Speed      float64   `json:"speed"`
+	RecordedAt time.Time `json:"recorded_at"`
+}
+
+// BusHistory is the recent breadcrumb trail of a bus, oldest point first.
+type BusHistory struct {
+	BusCode        string        `json:"bus_code"`
+	Points         []PositionFix `json:"points"`
+	DistanceMeters float64       `json:"distance_m"`
 }

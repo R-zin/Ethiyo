@@ -61,11 +61,17 @@ func (m *Manager) AcquireSession(parentCtx context.Context, timeout time.Duratio
 		return nil, fmt.Errorf("%w: %v", ErrConcurrencyLimitReached, err)
 	}
 
-	// 1. Acquire concurrency token
+	// 1. Acquire concurrency token. The wait is bounded by the operation
+	// timeout: HTTP request contexts carry no deadline, so an unbounded wait
+	// would park queued requests until their clients gave up.
+	wait := time.NewTimer(timeout)
+	defer wait.Stop()
 	select {
 	case m.sem <- struct{}{}:
 	case <-parentCtx.Done():
 		return nil, fmt.Errorf("%w: %v", ErrConcurrencyLimitReached, parentCtx.Err())
+	case <-wait.C:
+		return nil, fmt.Errorf("%w: no browser slot freed within %s", ErrConcurrencyLimitReached, timeout)
 	}
 
 	// 2. Prepare chromedp options
@@ -120,3 +126,9 @@ func (m *Manager) SetExecPath(path string) {
 	m.mu.Unlock()
 	slog.Info("browser executable configured", "path", path)
 }
+
+// Capacity returns the maximum number of concurrent browser sessions.
+func (m *Manager) Capacity() int { return cap(m.sem) }
+
+// InUse returns the number of browser sessions currently held.
+func (m *Manager) InUse() int { return len(m.sem) }
