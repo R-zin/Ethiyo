@@ -259,3 +259,66 @@ func TestConcurrentSubscribeUnsubscribe(t *testing.T) {
 		t.Errorf("leaked %d topics, %d subs", topics, n)
 	}
 }
+
+// TestDegradedTransitionIsPublished: when Chalo goes down the position does
+// not move, but subscribers must still learn it is no longer live.
+func TestDegradedTransitionIsPublished(t *testing.T) {
+	var degraded atomic.Bool
+	fetch := func(ctx context.Context, code string) (*models.BusTrackingInfo, error) {
+		return &models.BusTrackingInfo{
+			BusCode:  code,
+			Live:     &models.BusLiveInfo{BusCode: code, RecordedAt: time.Unix(1000, 0)},
+			Degraded: degraded.Load(),
+		}, nil
+	}
+	hub := NewHub(fetch, 10*time.Millisecond, 10)
+	defer hub.Close()
+
+	s, _ := hub.Subscribe("B1")
+	if ev := recv(t, s, time.Second); ev.Info.Degraded {
+		t.Fatal("first event should be live")
+	}
+	degraded.Store(true)
+	if ev := recv(t, s, time.Second); !ev.Info.Degraded {
+		t.Fatal("expected a degraded event for the unchanged position")
+	}
+	degraded.Store(false)
+	if ev := recv(t, s, time.Second); ev.Info.Degraded {
+		t.Fatal("expected recovery to be published")
+	}
+}
+
+func TestSubscribeManyIsAtomic(t *testing.T) {
+	hub := NewHub(newFakeSource().fetch, time.Hour, 3)
+	defer hub.Close()
+
+	if _, err := hub.Subscribe("X"); err != nil {
+		t.Fatal(err)
+	}
+	// 1 + 3 > 3: rejected as a whole, nothing half-subscribed.
+	if _, err := hub.SubscribeMany([]string{"A", "B", "C"}); !errors.Is(err, ErrCapacity) {
+		t.Fatalf("err = %v, want ErrCapacity", err)
+	}
+	if topics, n := hub.Stats(); topics != 1 || n != 1 {
+		t.Fatalf("after rejected SubscribeMany: %d topics, %d subs; want 1, 1", topics, n)
+	}
+
+	subs, err := hub.SubscribeMany([]string{"A", "B"})
+	if err != nil || len(subs) != 2 {
+		t.Fatalf("SubscribeMany: %v, %v", subs, err)
+	}
+	if topics, n := hub.Stats(); topics != 3 || n != 3 {
+		t.Errorf("Stats = %d topics, %d subs; want 3, 3", topics, n)
+	}
+	for _, s := range subs {
+		s.Close()
+	}
+	if _, n := hub.Stats(); n != 1 {
+		t.Errorf("after closing: %d subs, want 1", n)
+	}
+
+	hub.Close()
+	if _, err := hub.SubscribeMany([]string{"A"}); !errors.Is(err, ErrClosed) {
+		t.Errorf("after Close: err = %v, want ErrClosed", err)
+	}
+}

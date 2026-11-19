@@ -91,26 +91,8 @@ func (h *StreamHandler) Stream(c *gin.Context) {
 		return
 	}
 
-	rc := http.NewResponseController(c.Writer)
-	w := c.Writer
-	header := w.Header()
-	header.Set("Content-Type", "text/event-stream")
-	header.Set("Cache-Control", "no-cache, no-transform")
-	header.Set("Connection", "keep-alive")
-	header.Set("X-Accel-Buffering", "no") // disable nginx response buffering
-	w.WriteHeader(http.StatusOK)
-
-	write := func(payload string) bool {
-		// Per-write deadline: replaces the server-wide WriteTimeout, which
-		// would otherwise cut every stream off after a few seconds.
-		_ = rc.SetWriteDeadline(time.Now().Add(h.opts.WriteTimeout))
-		if _, err := io.WriteString(w, payload); err != nil {
-			return false
-		}
-		return rc.Flush() == nil
-	}
-
-	if !write(fmt.Sprintf("retry: %d\n\n", h.opts.RetryMillis)) || !write(formatEvent(eventPosition, initial)) {
+	sse := startSSE(c, h.opts)
+	if !sse.ok || !sse.event(eventPosition, initial) {
 		return
 	}
 
@@ -126,26 +108,66 @@ func (h *StreamHandler) Stream(c *gin.Context) {
 		case <-lifetime.C:
 			return // client reconnects automatically
 		case <-heartbeat.C:
-			if !write(": ping\n\n") {
+			if !sse.ping() {
 				return
 			}
 		case ev, ok := <-sub.C:
 			if !ok {
 				return // hub shut down
 			}
-			var payload string
+			var sent bool
 			if ev.Err != nil {
 				_, code, message := classifyError(ev.Err)
-				payload = formatEvent(eventUpstreamError, models.ErrorDetail{Code: code, Message: message})
+				sent = sse.event(eventUpstreamError, models.ErrorDetail{Code: code, Message: message})
 			} else {
-				payload = formatEvent(eventPosition, ev.Info)
+				sent = sse.event(eventPosition, ev.Info)
 			}
-			if !write(payload) {
+			if !sent {
 				return
 			}
 		}
 	}
 }
+
+// sseWriter writes server-sent events with a deadline on every write.
+type sseWriter struct {
+	w            http.ResponseWriter
+	rc           *http.ResponseController
+	writeTimeout time.Duration
+	ok           bool // false once any write failed
+}
+
+// startSSE sends the event-stream headers and the reconnection hint.
+func startSSE(c *gin.Context, opts StreamOptions) *sseWriter {
+	w := c.Writer
+	header := w.Header()
+	header.Set("Content-Type", "text/event-stream")
+	header.Set("Cache-Control", "no-cache, no-transform")
+	header.Set("Connection", "keep-alive")
+	header.Set("X-Accel-Buffering", "no") // disable nginx response buffering
+	w.WriteHeader(http.StatusOK)
+
+	s := &sseWriter{w: w, rc: http.NewResponseController(w), writeTimeout: opts.WriteTimeout, ok: true}
+	s.raw(fmt.Sprintf("retry: %d\n\n", opts.RetryMillis))
+	return s
+}
+
+func (s *sseWriter) raw(payload string) bool {
+	if !s.ok {
+		return false
+	}
+	// Per-write deadline: replaces the server-wide WriteTimeout, which would
+	// otherwise cut every stream off after a few seconds.
+	_ = s.rc.SetWriteDeadline(time.Now().Add(s.writeTimeout))
+	if _, err := io.WriteString(s.w, payload); err != nil || s.rc.Flush() != nil {
+		s.ok = false
+	}
+	return s.ok
+}
+
+func (s *sseWriter) event(name string, v any) bool { return s.raw(formatEvent(name, v)) }
+
+func (s *sseWriter) ping() bool { return s.raw(": ping\n\n") }
 
 // formatEvent renders one SSE frame. JSON never contains raw newlines, so a
 // single data line is always well-formed.

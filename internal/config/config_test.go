@@ -203,18 +203,22 @@ func TestValidateRejectsInvalidFeatureSettings(t *testing.T) {
 		return &Config{Port: "8080", BrowserMaxConcurrency: 1, RequestTimeout: time.Second,
 			BrowserTimeout: time.Second, RateLimitRPS: 1, RateLimitBurst: 1,
 			StreamPollInterval: time.Second, StreamMaxClients: 1,
-			StreamHeartbeat: time.Second, StreamMaxLifetime: time.Minute}
+			StreamHeartbeat: time.Second, StreamMaxLifetime: time.Minute,
+			BreakerThreshold: 5, BreakerCooldown: time.Second}
 	}
 	if err := base().Validate(); err != nil {
 		t.Fatalf("valid base config rejected: %v", err)
 	}
 	mutations := map[string]func(*Config){
-		"negative live ttl":  func(c *Config) { c.LiveCacheTTL = -time.Second },
-		"negative route ttl": func(c *Config) { c.RouteCacheTTL = -time.Second },
-		"zero poll interval": func(c *Config) { c.StreamPollInterval = 0 },
-		"zero max clients":   func(c *Config) { c.StreamMaxClients = 0 },
-		"zero heartbeat":     func(c *Config) { c.StreamHeartbeat = 0 },
-		"zero lifetime":      func(c *Config) { c.StreamMaxLifetime = 0 },
+		"negative live ttl":   func(c *Config) { c.LiveCacheTTL = -time.Second },
+		"negative route ttl":  func(c *Config) { c.RouteCacheTTL = -time.Second },
+		"zero poll interval":  func(c *Config) { c.StreamPollInterval = 0 },
+		"zero max clients":    func(c *Config) { c.StreamMaxClients = 0 },
+		"zero heartbeat":      func(c *Config) { c.StreamHeartbeat = 0 },
+		"zero lifetime":       func(c *Config) { c.StreamMaxLifetime = 0 },
+		"zero breaker limit":  func(c *Config) { c.BreakerThreshold = 0 },
+		"zero cooldown":       func(c *Config) { c.BreakerCooldown = 0 },
+		"negative last-known": func(c *Config) { c.LastKnownTTL = -time.Second },
 	}
 	for name, mutate := range mutations {
 		c := base()
@@ -222,5 +226,34 @@ func TestValidateRejectsInvalidFeatureSettings(t *testing.T) {
 		if err := c.Validate(); err == nil {
 			t.Errorf("%s: expected validation error", name)
 		}
+	}
+}
+
+func TestLoadResilienceSettings(t *testing.T) {
+	for _, k := range []string{"UPSTREAM_BREAKER_THRESHOLD", "UPSTREAM_BREAKER_COOLDOWN", "LAST_KNOWN_TTL"} {
+		t.Setenv(k, "")
+	}
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.BreakerThreshold != 5 || cfg.BreakerCooldown != 30*time.Second || cfg.LastKnownTTL != 15*time.Minute {
+		t.Errorf("defaults = %d/%v/%v", cfg.BreakerThreshold, cfg.BreakerCooldown, cfg.LastKnownTTL)
+	}
+
+	t.Setenv("UPSTREAM_BREAKER_THRESHOLD", "3")
+	t.Setenv("UPSTREAM_BREAKER_COOLDOWN", "5s")
+	t.Setenv("LAST_KNOWN_TTL", "0s")
+	cfg, err = Load()
+	if err != nil {
+		t.Fatalf("Load overrides: %v", err)
+	}
+	if cfg.BreakerThreshold != 3 || cfg.BreakerCooldown != 5*time.Second || cfg.LastKnownTTL != 0 {
+		t.Errorf("overrides = %d/%v/%v", cfg.BreakerThreshold, cfg.BreakerCooldown, cfg.LastKnownTTL)
+	}
+
+	t.Setenv("UPSTREAM_BREAKER_THRESHOLD", "0")
+	if _, err := Load(); err == nil {
+		t.Error("a zero breaker threshold must be rejected")
 	}
 }

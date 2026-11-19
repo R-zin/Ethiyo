@@ -11,7 +11,9 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/R-zin/Ethiyo/internal/apidocs"
 	"github.com/R-zin/Ethiyo/internal/auth"
+	"github.com/R-zin/Ethiyo/internal/breaker"
 	"github.com/R-zin/Ethiyo/internal/browser"
 	"github.com/R-zin/Ethiyo/internal/chalo"
 	"github.com/R-zin/Ethiyo/internal/config"
@@ -65,9 +67,12 @@ func New(cfg *config.Config) (*Server, error) {
 	chaloClient := chalo.NewClient(cfg.ChaloBaseURL, cfg.RequestTimeout)
 	chaloScraper := chalo.NewScraper(browserMgr, cfg.ChaloBaseURL, cfg.BrowserTimeout)
 	chaloService := chalo.NewServiceWithOptions(chaloClient, chaloScraper, chalo.Options{
-		LiveCacheTTL:  cfg.LiveCacheTTL,
-		RouteCacheTTL: cfg.RouteCacheTTL,
-		Observer:      observer,
+		LiveCacheTTL:     cfg.LiveCacheTTL,
+		RouteCacheTTL:    cfg.RouteCacheTTL,
+		LastKnownTTL:     cfg.LastKnownTTL,
+		BreakerThreshold: cfg.BreakerThreshold,
+		BreakerCooldown:  cfg.BreakerCooldown,
+		Observer:         observer,
 	})
 
 	// Live streams share one upstream poller per bus; pollers read through
@@ -77,12 +82,14 @@ func New(cfg *config.Config) (*Server, error) {
 	oauthService := auth.NewGoogleService(cfg)
 
 	// 3. Initialize HTTP handlers
-	healthHandler := handlers.NewHealthHandler(browserPath)
+	healthHandler := handlers.NewHealthHandler(browserPath).WithUpstream(chaloService.UpstreamStatus)
 	busHandler := handlers.NewBusHandler(chaloService)
-	streamHandler := handlers.NewStreamHandler(chaloService, hub, handlers.StreamOptions{
+	streamOpts := handlers.StreamOptions{
 		Heartbeat:   cfg.StreamHeartbeat,
 		MaxLifetime: cfg.StreamMaxLifetime,
-	})
+	}
+	streamHandler := handlers.NewStreamHandler(chaloService, hub, streamOpts)
+	fleetHandler := handlers.NewFleetHandler(chaloService, hub, streamOpts)
 	isSecureCookie := cfg.Env == "production"
 	authHandler := handlers.NewAuthHandler(oauthService, isSecureCookie)
 
@@ -122,6 +129,12 @@ func New(cfg *config.Config) (*Server, error) {
 			_, subs := hub.Stats()
 			return float64(subs)
 		})
+		appMetrics.RegisterGauge("ethiyo_upstream_circuit_open", "1 while calls to Chalo are paused by the circuit breaker.", func() float64 {
+			if chaloService.UpstreamStatus().State == breaker.Closed {
+				return 0
+			}
+			return 1
+		})
 		appMetrics.RegisterGauge("ethiyo_browser_sessions_in_use", "Headless browser sessions currently running.", func() float64 {
 			return float64(browserMgr.InUse())
 		})
@@ -142,6 +155,14 @@ func New(cfg *config.Config) (*Server, error) {
 			busGroup.GET("/:buscode/history", busHandler.History)
 			busGroup.GET("/:buscode/stream", streamHandler.Stream)
 		}
+
+		fleetGroup := v1.Group("/buses")
+		{
+			fleetGroup.GET("/track", fleetHandler.Track)
+			fleetGroup.GET("/stream", fleetHandler.Stream)
+		}
+
+		v1.GET("/openapi.json", apidocs.Handler())
 
 		authGroup := v1.Group("/auth/google")
 		{

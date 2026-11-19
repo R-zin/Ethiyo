@@ -10,11 +10,14 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"testing"
 	"time"
 
+	"github.com/R-zin/Ethiyo/internal/apidocs"
 	"github.com/R-zin/Ethiyo/internal/config"
 )
 
@@ -337,6 +340,7 @@ func TestMetricsEndpointExposesFeatureGauges(t *testing.T) {
 		`ethiyo_http_requests_total{method="GET",route="/api/v1/bus/:buscode/track",status="200"} 2`,
 		"ethiyo_stream_subscribers 0",
 		"ethiyo_browser_sessions_capacity 1",
+		"ethiyo_upstream_circuit_open 0",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("metrics missing %q", want)
@@ -394,5 +398,174 @@ func TestHistoryEndpointEndToEnd(t *testing.T) {
 	}
 	if !body.Success || body.Data.BusCode != "KS602" || len(body.Data.Points) != 1 || body.Data.Points[0].Latitude != 10.5 {
 		t.Errorf("unexpected history response: %+v", body)
+	}
+}
+
+// switchableUpstream serves Chalo's live endpoint and can be told to fail,
+// to exercise degradation and recovery end to end.
+type switchableUpstream struct {
+	srv     *httptest.Server
+	failing atomic.Bool
+}
+
+func newSwitchableUpstream(t *testing.T) *switchableUpstream {
+	t.Helper()
+	u := &switchableUpstream{}
+	recorded := time.Now().Add(-20 * time.Second).UnixMilli()
+	u.srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if u.failing.Load() {
+			http.Error(w, "upstream down", http.StatusBadGateway)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusAccepted)
+		fmt.Fprintf(w, `{"sessionData":{"data":{"currentInfo":{"lt":10.5,"ln":76.2,"pSp":20,"tS":%d}}}}`, recorded)
+	}))
+	t.Cleanup(u.srv.Close)
+	return u
+}
+
+func getJSON(t *testing.T, url string, into any) int {
+	t.Helper()
+	resp, err := http.Get(url)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if into != nil {
+		_ = json.NewDecoder(resp.Body).Decode(into)
+	}
+	return resp.StatusCode
+}
+
+func TestChaloOutageDegradesGracefullyAndRecovers(t *testing.T) {
+	up := newSwitchableUpstream(t)
+	_, base := startForTest(t, func(c *config.Config) {
+		c.ChaloBaseURL = up.srv.URL
+		c.LiveCacheTTL = 0
+		c.LastKnownTTL = time.Minute
+		c.BreakerThreshold = 2
+		c.BreakerCooldown = 200 * time.Millisecond
+	})
+
+	type trackResp struct {
+		Data struct {
+			Degraded bool `json:"degraded"`
+			Live     struct {
+				Latitude float64 `json:"latitude"`
+			} `json:"live"`
+		} `json:"data"`
+	}
+	type healthResp struct {
+		Degraded bool `json:"degraded"`
+		Upstream struct {
+			State string `json:"state"`
+		} `json:"upstream"`
+	}
+
+	var tr trackResp
+	if code := getJSON(t, base+"/api/v1/bus/KS602/track", &tr); code != 200 || tr.Data.Degraded {
+		t.Fatalf("healthy: status %d degraded %v", code, tr.Data.Degraded)
+	}
+
+	up.failing.Store(true)
+	for i := 0; i < 3; i++ {
+		tr = trackResp{}
+		if code := getJSON(t, base+"/api/v1/bus/KS602/track", &tr); code != 200 || !tr.Data.Degraded || tr.Data.Live.Latitude != 10.5 {
+			t.Fatalf("outage request %d: status %d, body %+v; want 200 with the last known position", i, code, tr)
+		}
+	}
+	var hr healthResp
+	if code := getJSON(t, base+"/health", &hr); code != 200 || !hr.Degraded || hr.Upstream.State != "open" {
+		t.Errorf("health during outage: %d %+v; want 200, degraded, circuit open", code, hr)
+	}
+	// A bus never seen before has no fallback: a clear 503, not a hang.
+	var er struct {
+		Error struct {
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+	if code := getJSON(t, base+"/api/v1/bus/NEW1/track", &er); code != 503 || er.Error.Code != "UPSTREAM_UNAVAILABLE" {
+		t.Errorf("unseen bus during outage: %d %s; want 503 UPSTREAM_UNAVAILABLE", code, er.Error.Code)
+	}
+
+	up.failing.Store(false)
+	time.Sleep(250 * time.Millisecond) // cooldown elapses; next call is the trial
+	tr = trackResp{}
+	if code := getJSON(t, base+"/api/v1/bus/KS602/track", &tr); code != 200 || tr.Data.Degraded {
+		t.Errorf("after recovery: status %d degraded %v; want fresh data", code, tr.Data.Degraded)
+	}
+	hr = healthResp{}
+	getJSON(t, base+"/health", &hr)
+	if hr.Degraded || hr.Upstream.State != "closed" {
+		t.Errorf("health after recovery: %+v", hr)
+	}
+}
+
+// TestOpenAPISpecCoversEveryV1Route keeps the published API description
+// honest: adding, removing or renaming a /api/v1 route without updating
+// internal/apidocs/openapi.json fails the build.
+func TestOpenAPISpecCoversEveryV1Route(t *testing.T) {
+	srv := newTestServer(t)
+	var spec struct {
+		Paths map[string]map[string]json.RawMessage `json:"paths"`
+	}
+	if err := json.Unmarshal(apidocs.Spec(), &spec); err != nil {
+		t.Fatal(err)
+	}
+
+	toOpenAPI := regexp.MustCompile(`:([a-zA-Z_]+)`)
+	registered := map[string]bool{}
+	for _, r := range srv.Engine().Routes() {
+		if strings.HasPrefix(r.Path, "/api/v1/") {
+			registered[r.Method+" "+toOpenAPI.ReplaceAllString(r.Path, "{$1}")] = true
+		}
+	}
+	documented := map[string]bool{}
+	for path, ops := range spec.Paths {
+		for method := range ops {
+			documented[strings.ToUpper(method)+" "+path] = true
+		}
+	}
+
+	for route := range registered {
+		if !documented[route] {
+			t.Errorf("route %s is not documented in openapi.json", route)
+		}
+	}
+	for route := range documented {
+		if !registered[route] {
+			t.Errorf("openapi.json documents %s, but no such route is registered", route)
+		}
+	}
+
+	w := httptest.NewRecorder()
+	srv.Engine().ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/v1/openapi.json", nil))
+	if w.Code != http.StatusOK || !strings.HasPrefix(w.Header().Get("Content-Type"), "application/json") {
+		t.Errorf("GET /api/v1/openapi.json: %d %q", w.Code, w.Header().Get("Content-Type"))
+	}
+}
+
+func TestFleetEndpointEndToEnd(t *testing.T) {
+	_, base := startForTest(t, nil)
+	var body struct {
+		Success bool `json:"success"`
+		Data    struct {
+			Buses []struct {
+				BusCode  string `json:"bus_code"`
+				Tracking *struct {
+					Live struct {
+						Latitude float64 `json:"latitude"`
+					} `json:"live"`
+				} `json:"tracking"`
+			} `json:"buses"`
+		} `json:"data"`
+	}
+	if code := getJSON(t, base+"/api/v1/buses/track?codes=KS602,DL1PC0001", &body); code != 200 {
+		t.Fatalf("status %d", code)
+	}
+	if !body.Success || len(body.Data.Buses) != 2 || body.Data.Buses[1].BusCode != "DL1PC0001" ||
+		body.Data.Buses[0].Tracking == nil || body.Data.Buses[0].Tracking.Live.Latitude != 10.5 {
+		t.Errorf("unexpected fleet response: %+v", body)
 	}
 }

@@ -6,10 +6,12 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/R-zin/Ethiyo/internal/auth"
+	"github.com/R-zin/Ethiyo/internal/breaker"
 	"github.com/R-zin/Ethiyo/internal/chalo"
 	"github.com/R-zin/Ethiyo/internal/models"
 	"github.com/gin-gonic/gin"
@@ -638,5 +640,42 @@ func TestV1History(t *testing.T) {
 		if w.Code != want {
 			t.Errorf("%s: status = %d, want %d", path, w.Code, want)
 		}
+	}
+}
+
+func TestOpenCircuitMapsTo503WithRetryAfter(t *testing.T) {
+	svc := &mockChaloService{
+		getBusTrackingFunc: func(ctx context.Context, busCode string) (*models.BusTrackingInfo, error) {
+			return nil, &breaker.OpenError{RetryAfter: 12200 * time.Millisecond}
+		},
+	}
+	r := setupTestRouter(svc, nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/v1/bus/KS602/track", nil))
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503", w.Code)
+	}
+	if got := w.Header().Get("Retry-After"); got != "13" {
+		t.Errorf("Retry-After = %q, want \"13\" (remaining cooldown, rounded up)", got)
+	}
+	var resp models.ErrorResponse
+	_ = json.Unmarshal(w.Body.Bytes(), &resp)
+	if resp.Error.Code != "UPSTREAM_UNAVAILABLE" {
+		t.Errorf("code = %q, want UPSTREAM_UNAVAILABLE", resp.Error.Code)
+	}
+}
+
+func TestDegradedFlagIsSerialized(t *testing.T) {
+	svc := &mockChaloService{
+		getBusTrackingFunc: func(ctx context.Context, busCode string) (*models.BusTrackingInfo, error) {
+			return &models.BusTrackingInfo{BusCode: busCode, Live: &models.BusLiveInfo{BusCode: busCode}, Degraded: true}, nil
+		},
+	}
+	r := setupTestRouter(svc, nil)
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/v1/bus/KS602/track", nil))
+	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"degraded":true`) {
+		t.Errorf("status %d body %s; want 200 with degraded:true", w.Code, w.Body.String())
 	}
 }

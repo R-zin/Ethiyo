@@ -3,9 +3,12 @@ package handlers
 import (
 	"context"
 	"errors"
+	"math"
 	"net/http"
+	"strconv"
 
 	"github.com/R-zin/Ethiyo/internal/auth"
+	"github.com/R-zin/Ethiyo/internal/breaker"
 	"github.com/R-zin/Ethiyo/internal/browser"
 	"github.com/R-zin/Ethiyo/internal/chalo"
 	"github.com/R-zin/Ethiyo/internal/models"
@@ -20,11 +23,20 @@ func classifyError(err error) (status int, code, message string) {
 	case errors.Is(err, models.ErrBusCodeRequired) || errors.Is(err, models.ErrInvalidBusCodeFormat):
 		return http.StatusBadRequest, "INVALID_BUS_CODE", err.Error()
 
+	case errors.Is(err, models.ErrTooManyBusCodes):
+		return http.StatusBadRequest, "TOO_MANY_BUS_CODES", err.Error()
+
+	case errors.Is(err, errInvalidFormat):
+		return http.StatusBadRequest, "INVALID_FORMAT", err.Error()
+
 	case errors.Is(err, auth.ErrInvalidState) || errors.Is(err, auth.ErrExpiredState):
 		return http.StatusBadRequest, "INVALID_OAUTH_STATE", err.Error()
 
 	case errors.Is(err, auth.ErrOAuthNotConfigured):
 		return http.StatusServiceUnavailable, "OAUTH_NOT_CONFIGURED", err.Error()
+
+	case errors.Is(err, breaker.ErrOpen):
+		return http.StatusServiceUnavailable, "UPSTREAM_UNAVAILABLE", "Chalo is not responding; live tracking is paused briefly to let it recover"
 
 	case errors.Is(err, chalo.ErrBusNotFound):
 		return http.StatusNotFound, "BUS_NOT_FOUND", "Bus route not found on Chalo"
@@ -65,6 +77,20 @@ func HandleError(c *gin.Context, err error) {
 	case "BROWSER_BUSY", "STREAM_CAPACITY", "SHUTTING_DOWN":
 		// Transient capacity errors: tell well-behaved clients when to retry.
 		c.Header("Retry-After", "5")
+	case "UPSTREAM_UNAVAILABLE":
+		c.Header("Retry-After", strconv.Itoa(openRetryAfterSeconds(err)))
 	}
 	c.JSON(status, models.NewErrorResponse(code, message))
+}
+
+// openRetryAfterSeconds is the time until the circuit breaker allows a trial
+// call, rounded up to whole seconds (minimum 1).
+func openRetryAfterSeconds(err error) int {
+	var oe *breaker.OpenError
+	if errors.As(err, &oe) {
+		if secs := int(math.Ceil(oe.RetryAfter.Seconds())); secs > 1 {
+			return secs
+		}
+	}
+	return 1
 }

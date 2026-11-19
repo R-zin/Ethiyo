@@ -8,6 +8,7 @@ import (
 	"math"
 	"time"
 
+	"github.com/R-zin/Ethiyo/internal/breaker"
 	"github.com/R-zin/Ethiyo/internal/cache"
 	"github.com/R-zin/Ethiyo/internal/models"
 	"github.com/R-zin/Ethiyo/internal/telemetry"
@@ -59,6 +60,14 @@ type Options struct {
 	HistoryMaxBuses int
 	StaleAfter      time.Duration
 	Observer        Observer
+
+	// LastKnownTTL is how long a bus's last good position may be served,
+	// flagged degraded, while Chalo is failing. <= 0 disables the fallback.
+	LastKnownTTL time.Duration
+	// BreakerThreshold consecutive live-tracking failures open the circuit
+	// for BreakerCooldown. Non-positive values use 5 failures / 30s.
+	BreakerThreshold int
+	BreakerCooldown  time.Duration
 }
 
 // ChaloService implements Service using the Chalo HTTP client and the
@@ -70,6 +79,8 @@ type ChaloService struct {
 	liveCache  *cache.TTL[string, *models.BusLiveInfo]
 	routeCache *cache.TTL[string, *models.BusRouteInfo]
 	history    *telemetry.History
+	lastGood   *cache.TTL[string, *models.BusLiveInfo]
+	breaker    *breaker.Breaker
 	staleAfter time.Duration
 	observer   Observer
 	now        func() time.Time
@@ -91,6 +102,8 @@ func NewServiceWithOptions(client *Client, scraper *Scraper, opts Options) *Chal
 		liveCache:  cache.New[string, *models.BusLiveInfo](opts.LiveCacheTTL, opts.CacheMaxEntries),
 		routeCache: cache.New[string, *models.BusRouteInfo](opts.RouteCacheTTL, opts.CacheMaxEntries),
 		history:    telemetry.NewHistory(opts.HistoryPoints, opts.HistoryMaxBuses),
+		lastGood:   cache.New[string, *models.BusLiveInfo](opts.LastKnownTTL, opts.HistoryMaxBuses),
+		breaker:    breaker.New(opts.BreakerThreshold, opts.BreakerCooldown),
 		staleAfter: opts.StaleAfter,
 		observer:   opts.Observer,
 		now:        time.Now,
@@ -134,6 +147,9 @@ func (s *ChaloService) GetBusTracking(ctx context.Context, busCode string) (*mod
 	})
 	s.observeCache("live", hit)
 	if err != nil {
+		if info, ok := s.lastKnownFallback(ctx, validCode, err); ok {
+			return info, nil
+		}
 		slog.ErrorContext(ctx, "failed to fetch live tracking", "bus_code", validCode, "error", err)
 		return nil, err
 	}
@@ -149,22 +165,31 @@ func (s *ChaloService) GetBusTracking(ctx context.Context, busCode string) (*mod
 	}, nil
 }
 
+// isUpstreamFailure reports whether err means Chalo itself is unhealthy. An
+// unknown bus is a healthy answer, not an outage.
+func isUpstreamFailure(err error) bool {
+	return err != nil && !errors.Is(err, ErrBusNotFound)
+}
+
 // loadLive fetches and parses one live position from Chalo and records it in
-// the motion history. It runs at most once per cache TTL per bus.
+// the motion history. It runs at most once per cache TTL per bus, and not at
+// all while the circuit breaker is open.
 func (s *ChaloService) loadLive(ctx context.Context, busCode string) (*models.BusLiveInfo, error) {
-	slog.InfoContext(ctx, "fetching live tracking", "bus_code", busCode)
-	start := time.Now()
-	body, trackURL, err := s.client.FetchLiveTracking(ctx, busCode)
 	var live *models.BusLiveInfo
-	if err == nil {
-		live, err = ParseLiveTracking(busCode, trackURL, body)
-	}
-	// An unknown bus is a successful upstream exchange, not an outage.
-	upstreamErr := err
-	if errors.Is(err, ErrBusNotFound) {
-		upstreamErr = nil
-	}
-	s.observeUpstream(OpLiveTracking, start, upstreamErr)
+	err := s.breaker.Do(func() error {
+		slog.InfoContext(ctx, "fetching live tracking", "bus_code", busCode)
+		start := time.Now()
+		body, trackURL, err := s.client.FetchLiveTracking(ctx, busCode)
+		if err == nil {
+			live, err = ParseLiveTracking(busCode, trackURL, body)
+		}
+		upstreamErr := err
+		if !isUpstreamFailure(err) {
+			upstreamErr = nil
+		}
+		s.observeUpstream(OpLiveTracking, start, upstreamErr)
+		return err
+	}, isUpstreamFailure)
 	if err != nil {
 		return nil, err
 	}
@@ -175,7 +200,37 @@ func (s *ChaloService) loadLive(ctx context.Context, busCode string) (*models.Bu
 		Speed:      live.Speed,
 		RecordedAt: live.RecordedAt,
 	})
+	s.lastGood.Set(busCode, live)
 	return live, nil
+}
+
+// lastKnownFallback serves the bus's last good position, flagged degraded,
+// when Chalo is failing. It never masks "bus not found" (the bus really is
+// gone) or a caller that gave up.
+func (s *ChaloService) lastKnownFallback(ctx context.Context, busCode string, err error) (*models.BusTrackingInfo, bool) {
+	if ctx.Err() != nil || !isUpstreamFailure(err) {
+		return nil, false
+	}
+	last, ok := s.lastGood.Get(busCode)
+	s.observeCache("last_known", ok)
+	if !ok {
+		return nil, false
+	}
+	out := *last
+	out.AgeSeconds, out.Stale = s.freshness(out.RecordedAt)
+	slog.WarnContext(ctx, "Chalo unavailable; serving last known position",
+		"bus_code", busCode, "age_seconds", out.AgeSeconds, "error", err)
+	return &models.BusTrackingInfo{
+		BusCode:     busCode,
+		TrackingURL: out.TrackingURL,
+		Live:        &out,
+		Degraded:    true,
+	}, true
+}
+
+// UpstreamStatus reports the health of the live-tracking upstream.
+func (s *ChaloService) UpstreamStatus() breaker.Status {
+	return s.breaker.Status()
 }
 
 // freshness reports how old a position is (to 0.1s) and whether it is stale.

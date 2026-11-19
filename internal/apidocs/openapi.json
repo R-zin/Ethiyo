@@ -1,0 +1,1023 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Ethiyo API",
+    "version": "1.3.0",
+    "description": "Live bus tracking for Chalo-operated transit: positions, motion telemetry, route discovery, multi-bus fleets and server-sent event streams. All JSON responses use the `{success, data}` / `{success, error}` envelope."
+  },
+  "servers": [
+    {
+      "url": "/"
+    }
+  ],
+  "tags": [
+    {
+      "name": "Buses",
+      "description": "Single-bus lookups"
+    },
+    {
+      "name": "Fleet",
+      "description": "Several buses in one request"
+    },
+    {
+      "name": "Streaming",
+      "description": "Server-sent event streams"
+    },
+    {
+      "name": "System",
+      "description": "Health and documentation"
+    },
+    {
+      "name": "Auth",
+      "description": "Optional Google OAuth"
+    }
+  ],
+  "paths": {
+    "/api/v1/health": {
+      "get": {
+        "tags": [
+          "System"
+        ],
+        "operationId": "getHealth",
+        "summary": "Service health",
+        "description": "Always 200 while the process can serve requests. `degraded` and `upstream` report whether Chalo is reachable (circuit breaker state).",
+        "responses": {
+          "200": {
+            "description": "Service is up",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Health"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/openapi.json": {
+      "get": {
+        "tags": [
+          "System"
+        ],
+        "operationId": "getOpenAPI",
+        "summary": "This OpenAPI document",
+        "responses": {
+          "200": {
+            "description": "OpenAPI 3.1 document",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/bus/{buscode}/track": {
+      "get": {
+        "tags": [
+          "Buses"
+        ],
+        "operationId": "trackBus",
+        "summary": "Live position of a bus",
+        "description": "Current position with heading and freshness. When Chalo is failing, the last known position is returned with `degraded: true` instead of an error (if one is known and recent).",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/BusCode"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Live (or degraded last known) position",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TrackingEnvelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "502": {
+            "$ref": "#/components/responses/UpstreamError"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "504": {
+            "$ref": "#/components/responses/Timeout"
+          }
+        }
+      }
+    },
+    "/api/v1/bus/{buscode}/route": {
+      "get": {
+        "tags": [
+          "Buses"
+        ],
+        "operationId": "getBusRoute",
+        "summary": "Discover the route schedule endpoint",
+        "description": "Uses a headless browser on first request (can take tens of seconds); cached afterwards.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/BusCode"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Discovered endpoints",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RouteEnvelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "502": {
+            "$ref": "#/components/responses/UpstreamError"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "504": {
+            "$ref": "#/components/responses/Timeout"
+          }
+        }
+      }
+    },
+    "/api/v1/bus/{buscode}/url": {
+      "get": {
+        "tags": [
+          "Buses"
+        ],
+        "operationId": "getTrackingURL",
+        "summary": "Live-tracking URL of a bus",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/BusCode"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Tracking URL",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/URLEnvelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "502": {
+            "$ref": "#/components/responses/UpstreamError"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "504": {
+            "$ref": "#/components/responses/Timeout"
+          }
+        }
+      }
+    },
+    "/api/v1/bus/{buscode}/history": {
+      "get": {
+        "tags": [
+          "Buses"
+        ],
+        "operationId": "getBusHistory",
+        "summary": "Recent breadcrumb trail",
+        "description": "Recent positions, oldest first, and distance travelled. `format=geojson` or `format=gpx` returns a downloadable file instead of the JSON envelope.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/BusCode"
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "json",
+                "geojson",
+                "gpx"
+              ],
+              "default": "json"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Trail",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HistoryEnvelope"
+                }
+              },
+              "application/geo+json": {
+                "schema": {
+                  "type": "object",
+                  "description": "RFC 7946 FeatureCollection: a LineString of the trail plus one Point per fix"
+                }
+              },
+              "application/gpx+xml": {
+                "schema": {
+                  "type": "string",
+                  "description": "GPX 1.1 track"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "502": {
+            "$ref": "#/components/responses/UpstreamError"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          },
+          "504": {
+            "$ref": "#/components/responses/Timeout"
+          }
+        }
+      }
+    },
+    "/api/v1/bus/{buscode}/stream": {
+      "get": {
+        "tags": [
+          "Streaming"
+        ],
+        "operationId": "streamBus",
+        "summary": "Live position stream (SSE)",
+        "description": "Server-sent events. `position` (data: BusTrackingInfo) is sent on connect and whenever the position or its trust changes; `upstream_error` (data: ErrorDetail) when Chalo fails. A `: ping` comment is sent periodically. Errors before the stream starts are returned as JSON.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/BusCode"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Event stream",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/buses/track": {
+      "get": {
+        "tags": [
+          "Fleet"
+        ],
+        "operationId": "trackFleet",
+        "summary": "Live positions of several buses",
+        "description": "Per-bus results in request order; one failing bus never fails the request.",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Codes"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Per-bus results",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FleetEnvelope"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          }
+        }
+      }
+    },
+    "/api/v1/buses/stream": {
+      "get": {
+        "tags": [
+          "Fleet",
+          "Streaming"
+        ],
+        "operationId": "streamFleet",
+        "summary": "Live stream for several buses (SSE)",
+        "description": "One connection for many buses (browsers allow only ~6 connections per origin). Events: `position` (data: BusTrackingInfo, includes bus_code) and `bus_error` (data: BusErrorEvent).",
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/Codes"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Event stream",
+            "content": {
+              "text/event-stream": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "429": {
+            "$ref": "#/components/responses/RateLimited"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/auth/google/login": {
+      "get": {
+        "tags": [
+          "Auth"
+        ],
+        "operationId": "googleLogin",
+        "summary": "Start Google sign-in",
+        "responses": {
+          "307": {
+            "description": "Redirect to Google with a signed CSRF state"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/api/v1/auth/google/callback": {
+      "get": {
+        "tags": [
+          "Auth"
+        ],
+        "operationId": "googleCallback",
+        "summary": "Complete Google sign-in",
+        "parameters": [
+          {
+            "name": "code",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "state",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Signed in",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TokenResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "500": {
+            "description": "Token exchange failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "parameters": {
+      "BusCode": {
+        "name": "buscode",
+        "in": "path",
+        "required": true,
+        "description": "Vehicle / route code, e.g. KS602",
+        "schema": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9_-]{1,64}$"
+        }
+      },
+      "Codes": {
+        "name": "codes",
+        "in": "query",
+        "required": true,
+        "description": "Comma-separated bus codes (max 20 after removing duplicates), e.g. KS602,DL1PC0001",
+        "schema": {
+          "type": "string"
+        }
+      }
+    },
+    "headers": {
+      "RetryAfter": {
+        "description": "Seconds until retrying is worthwhile",
+        "schema": {
+          "type": "integer",
+          "minimum": 1
+        }
+      }
+    },
+    "responses": {
+      "BadRequest": {
+        "description": "Invalid input (INVALID_BUS_CODE, TOO_MANY_BUS_CODES, INVALID_FORMAT, ...)",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            }
+          }
+        }
+      },
+      "NotFound": {
+        "description": "BUS_NOT_FOUND",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            }
+          }
+        }
+      },
+      "RateLimited": {
+        "description": "RATE_LIMIT_EXCEEDED",
+        "headers": {
+          "Retry-After": {
+            "$ref": "#/components/headers/RetryAfter"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            }
+          }
+        }
+      },
+      "UpstreamError": {
+        "description": "UPSTREAM_CHALO_ERROR",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            }
+          }
+        }
+      },
+      "Unavailable": {
+        "description": "Temporarily unavailable: UPSTREAM_UNAVAILABLE (circuit open), BROWSER_BUSY, STREAM_CAPACITY, SHUTTING_DOWN or OAUTH_NOT_CONFIGURED",
+        "headers": {
+          "Retry-After": {
+            "$ref": "#/components/headers/RetryAfter"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            }
+          }
+        }
+      },
+      "Timeout": {
+        "description": "CHALO_TIMEOUT",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/ErrorResponse"
+            }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "ErrorDetail": {
+        "type": "object",
+        "required": [
+          "code",
+          "message"
+        ],
+        "properties": {
+          "code": {
+            "type": "string",
+            "examples": [
+              "BUS_NOT_FOUND"
+            ]
+          },
+          "message": {
+            "type": "string"
+          }
+        }
+      },
+      "ErrorResponse": {
+        "type": "object",
+        "required": [
+          "success",
+          "error"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "const": false
+          },
+          "error": {
+            "$ref": "#/components/schemas/ErrorDetail"
+          }
+        }
+      },
+      "BusLiveInfo": {
+        "type": "object",
+        "required": [
+          "bus_code",
+          "latitude",
+          "longitude",
+          "recorded_at",
+          "live_tracking",
+          "tracking_url",
+          "age_seconds",
+          "stale"
+        ],
+        "properties": {
+          "bus_code": {
+            "type": "string"
+          },
+          "vehicle_code": {
+            "type": "string"
+          },
+          "operator": {
+            "type": "string"
+          },
+          "route_name": {
+            "type": "string"
+          },
+          "latitude": {
+            "type": "number"
+          },
+          "longitude": {
+            "type": "number"
+          },
+          "speed": {
+            "type": "number",
+            "description": "km/h; omitted when 0"
+          },
+          "recorded_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "next_stop": {
+            "type": "string"
+          },
+          "previous_stop": {
+            "type": "string"
+          },
+          "live_tracking": {
+            "type": "boolean"
+          },
+          "tracking_url": {
+            "type": "string",
+            "format": "uri"
+          },
+          "heading": {
+            "type": "number",
+            "minimum": 0,
+            "exclusiveMaximum": 360,
+            "description": "Degrees clockwise from north; omitted until the bus has moved"
+          },
+          "age_seconds": {
+            "type": "number",
+            "minimum": 0
+          },
+          "stale": {
+            "type": "boolean"
+          }
+        }
+      },
+      "BusTrackingInfo": {
+        "type": "object",
+        "required": [
+          "bus_code",
+          "tracking_url"
+        ],
+        "properties": {
+          "bus_code": {
+            "type": "string"
+          },
+          "tracking_url": {
+            "type": "string",
+            "format": "uri"
+          },
+          "live": {
+            "$ref": "#/components/schemas/BusLiveInfo"
+          },
+          "degraded": {
+            "type": "boolean",
+            "description": "true when Chalo is unreachable and `live` is the last known position"
+          }
+        }
+      },
+      "BusRouteInfo": {
+        "type": "object",
+        "required": [
+          "bus_code",
+          "tracking_url",
+          "route_url"
+        ],
+        "properties": {
+          "bus_code": {
+            "type": "string"
+          },
+          "tracking_url": {
+            "type": "string",
+            "format": "uri"
+          },
+          "route_url": {
+            "type": "string",
+            "format": "uri"
+          }
+        }
+      },
+      "PositionFix": {
+        "type": "object",
+        "required": [
+          "latitude",
+          "longitude",
+          "speed",
+          "recorded_at"
+        ],
+        "properties": {
+          "latitude": {
+            "type": "number"
+          },
+          "longitude": {
+            "type": "number"
+          },
+          "speed": {
+            "type": "number"
+          },
+          "recorded_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "BusHistory": {
+        "type": "object",
+        "required": [
+          "bus_code",
+          "points",
+          "distance_m"
+        ],
+        "properties": {
+          "bus_code": {
+            "type": "string"
+          },
+          "points": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PositionFix"
+            }
+          },
+          "distance_m": {
+            "type": "number",
+            "minimum": 0
+          }
+        }
+      },
+      "FleetItem": {
+        "type": "object",
+        "required": [
+          "bus_code"
+        ],
+        "description": "Exactly one of `tracking` and `error` is present",
+        "properties": {
+          "bus_code": {
+            "type": "string"
+          },
+          "tracking": {
+            "$ref": "#/components/schemas/BusTrackingInfo"
+          },
+          "error": {
+            "$ref": "#/components/schemas/ErrorDetail"
+          }
+        }
+      },
+      "FleetResponse": {
+        "type": "object",
+        "required": [
+          "buses"
+        ],
+        "properties": {
+          "buses": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FleetItem"
+            },
+            "maxItems": 20
+          }
+        }
+      },
+      "BusErrorEvent": {
+        "type": "object",
+        "required": [
+          "bus_code",
+          "code",
+          "message"
+        ],
+        "properties": {
+          "bus_code": {
+            "type": "string"
+          },
+          "code": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          }
+        }
+      },
+      "UpstreamStatus": {
+        "type": "object",
+        "required": [
+          "state",
+          "consecutive_failures"
+        ],
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "closed",
+              "open",
+              "half_open"
+            ]
+          },
+          "consecutive_failures": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "last_success": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "last_failure": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "retry_after_seconds": {
+            "type": "number",
+            "minimum": 0
+          }
+        }
+      },
+      "Health": {
+        "type": "object",
+        "required": [
+          "message",
+          "status",
+          "browser"
+        ],
+        "properties": {
+          "message": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "const": "healthy"
+          },
+          "browser": {
+            "type": "boolean"
+          },
+          "degraded": {
+            "type": "boolean"
+          },
+          "upstream": {
+            "$ref": "#/components/schemas/UpstreamStatus"
+          }
+        }
+      },
+      "GoogleUserInfo": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "email": {
+            "type": "string"
+          },
+          "verified_email": {
+            "type": "boolean"
+          },
+          "name": {
+            "type": "string"
+          },
+          "picture": {
+            "type": "string"
+          }
+        }
+      },
+      "TokenResponse": {
+        "type": "object",
+        "required": [
+          "message",
+          "access_token",
+          "expiry"
+        ],
+        "properties": {
+          "message": {
+            "type": "string"
+          },
+          "access_token": {
+            "type": "string"
+          },
+          "expiry": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "user": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/GoogleUserInfo"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        }
+      },
+      "TrackingEnvelope": {
+        "type": "object",
+        "description": "Tracking response",
+        "required": [
+          "success",
+          "data"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "const": true
+          },
+          "data": {
+            "$ref": "#/components/schemas/BusTrackingInfo"
+          }
+        }
+      },
+      "RouteEnvelope": {
+        "type": "object",
+        "description": "Route discovery response",
+        "required": [
+          "success",
+          "data"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "const": true
+          },
+          "data": {
+            "$ref": "#/components/schemas/BusRouteInfo"
+          }
+        }
+      },
+      "URLEnvelope": {
+        "type": "object",
+        "description": "Tracking URL response",
+        "required": [
+          "success",
+          "data"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "const": true
+          },
+          "data": {
+            "type": "object",
+            "required": [
+              "bus_code",
+              "tracking_url"
+            ],
+            "properties": {
+              "bus_code": {
+                "type": "string"
+              },
+              "tracking_url": {
+                "type": "string",
+                "format": "uri"
+              }
+            }
+          }
+        }
+      },
+      "HistoryEnvelope": {
+        "type": "object",
+        "description": "Trail response",
+        "required": [
+          "success",
+          "data"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "const": true
+          },
+          "data": {
+            "$ref": "#/components/schemas/BusHistory"
+          }
+        }
+      },
+      "FleetEnvelope": {
+        "type": "object",
+        "description": "Multi-bus response",
+        "required": [
+          "success",
+          "data"
+        ],
+        "properties": {
+          "success": {
+            "type": "boolean",
+            "const": true
+          },
+          "data": {
+            "$ref": "#/components/schemas/FleetResponse"
+          }
+        }
+      }
+    }
+  }
+}

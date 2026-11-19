@@ -48,6 +48,11 @@ type Config struct {
 	StreamHeartbeat    time.Duration
 	StreamMaxLifetime  time.Duration
 
+	// Upstream resilience
+	BreakerThreshold int
+	BreakerCooldown  time.Duration
+	LastKnownTTL     time.Duration
+
 	// Observability
 	MetricsEnabled bool
 }
@@ -76,6 +81,9 @@ func Load() (*Config, error) {
 		StreamHeartbeat:       getDurationEnv("STREAM_HEARTBEAT", 15*time.Second),
 		StreamMaxLifetime:     getDurationEnv("STREAM_MAX_LIFETIME", 30*time.Minute),
 		MetricsEnabled:        getBoolEnv("METRICS_ENABLED", true),
+		BreakerThreshold:      getIntEnv("UPSTREAM_BREAKER_THRESHOLD", 5),
+		BreakerCooldown:       getDurationEnv("UPSTREAM_BREAKER_COOLDOWN", 30*time.Second),
+		LastKnownTTL:          getDurationEnv("LAST_KNOWN_TTL", 15*time.Minute),
 	}
 
 	origins := getEnv("CORS_ALLOWED_ORIGINS", "*")
@@ -131,6 +139,12 @@ func (c *Config) Validate() error {
 	}
 	if c.StreamHeartbeat <= 0 || c.StreamMaxLifetime <= 0 {
 		return fmt.Errorf("STREAM_HEARTBEAT and STREAM_MAX_LIFETIME must be positive")
+	}
+	if c.BreakerThreshold <= 0 || c.BreakerCooldown <= 0 {
+		return fmt.Errorf("UPSTREAM_BREAKER_THRESHOLD and UPSTREAM_BREAKER_COOLDOWN must be positive")
+	}
+	if c.LastKnownTTL < 0 {
+		return fmt.Errorf("LAST_KNOWN_TTL must not be negative")
 	}
 	return nil
 }

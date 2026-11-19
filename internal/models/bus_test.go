@@ -87,3 +87,36 @@ func TestResponseSerialization(t *testing.T) {
 		t.Errorf("expected json to contain '\"success\":true', got: %s", string(succData))
 	}
 }
+
+func TestParseBusCodes(t *testing.T) {
+	got, err := ParseBusCodes(" KS602, DL1PC0001 ,,KS602, route_500 ", 5)
+	if err != nil {
+		t.Fatalf("ParseBusCodes: %v", err)
+	}
+	want := []string{"KS602", "DL1PC0001", "route_500"}
+	if len(got) != len(want) {
+		t.Fatalf("got %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("got[%d] = %q, want %q (trimmed, de-duplicated, order kept)", i, got[i], want[i])
+		}
+	}
+}
+
+func TestParseBusCodesErrors(t *testing.T) {
+	if _, err := ParseBusCodes(" , ,", 5); !errors.Is(err, ErrBusCodeRequired) {
+		t.Errorf("empty list: err = %v, want ErrBusCodeRequired", err)
+	}
+	_, err := ParseBusCodes("KS602,bad$code", 5)
+	if !errors.Is(err, ErrInvalidBusCodeFormat) || !strings.Contains(err.Error(), "entry 2") {
+		t.Errorf("invalid entry: err = %v, want ErrInvalidBusCodeFormat naming entry 2", err)
+	}
+	if _, err := ParseBusCodes("A,B,C", 2); !errors.Is(err, ErrTooManyBusCodes) {
+		t.Errorf("too many: err = %v, want ErrTooManyBusCodes", err)
+	}
+	// Duplicates do not count toward the limit.
+	if codes, err := ParseBusCodes("A,A,A,B", 2); err != nil || len(codes) != 2 {
+		t.Errorf("duplicates: codes=%v err=%v", codes, err)
+	}
+}

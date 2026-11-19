@@ -2,6 +2,7 @@ package models
 
 import (
 	"errors"
+	"fmt"
 	"regexp"
 	"strings"
 	"time"
@@ -16,7 +17,13 @@ var (
 
 	// ErrInvalidBusCodeFormat indicates the bus code contains invalid characters or exceeds length limits.
 	ErrInvalidBusCodeFormat = errors.New("buscode must be alphanumeric (hyphens and underscores allowed) and between 1 and 64 characters")
+
+	// ErrTooManyBusCodes indicates a multi-bus request listed more buses than allowed.
+	ErrTooManyBusCodes = errors.New("too many bus codes in one request")
 )
+
+// MaxFleetSize bounds how many buses one multi-bus request may ask for.
+const MaxFleetSize = 20
 
 // ValidateBusCode validates the bus code parameter against safe characters and length constraints.
 func ValidateBusCode(busCode string) (string, error) {
@@ -30,12 +37,57 @@ func ValidateBusCode(busCode string) (string, error) {
 	return trimmed, nil
 }
 
+// ParseBusCodes parses a comma-separated list of bus codes (as used by the
+// multi-bus endpoints): entries are trimmed, validated and de-duplicated,
+// keeping first-seen order. At most max distinct codes are accepted.
+func ParseBusCodes(raw string, max int) ([]string, error) {
+	var codes []string
+	seen := make(map[string]bool)
+	for i, part := range strings.Split(raw, ",") {
+		if strings.TrimSpace(part) == "" {
+			continue
+		}
+		code, err := ValidateBusCode(part)
+		if err != nil {
+			return nil, fmt.Errorf("%w (entry %d)", err, i+1)
+		}
+		if seen[code] {
+			continue
+		}
+		seen[code] = true
+		codes = append(codes, code)
+		if len(codes) > max {
+			return nil, fmt.Errorf("%w: at most %d", ErrTooManyBusCodes, max)
+		}
+	}
+	if len(codes) == 0 {
+		return nil, ErrBusCodeRequired
+	}
+	return codes, nil
+}
+
+// FleetItem is one bus's result in a multi-bus response: exactly one of
+// Tracking and Error is set, so one bad bus never fails the whole request.
+type FleetItem struct {
+	BusCode  string           `json:"bus_code"`
+	Tracking *BusTrackingInfo `json:"tracking,omitempty"`
+	Error    *ErrorDetail     `json:"error,omitempty"`
+}
+
+// FleetResponse lists per-bus results in request order.
+type FleetResponse struct {
+	Buses []FleetItem `json:"buses"`
+}
+
 // BusTrackingInfo contains the live tracking URL for a given bus code, plus
 // the live position snapshot when available.
 type BusTrackingInfo struct {
 	BusCode     string       `json:"bus_code"`
 	TrackingURL string       `json:"tracking_url"`
 	Live        *BusLiveInfo `json:"live,omitempty"`
+	// Degraded is true when Chalo could not be reached and Live is the last
+	// known position rather than a fresh one.
+	Degraded bool `json:"degraded,omitempty"`
 }
 
 // BusRouteInfo contains the tracking URL and live route details URL discovered for a bus code.

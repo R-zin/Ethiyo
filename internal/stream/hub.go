@@ -90,7 +90,30 @@ func (h *Hub) Subscribe(busCode string) (*Subscription, error) {
 	if h.nsubs >= h.maxSubs {
 		return nil, ErrCapacity
 	}
+	return h.subscribeLocked(busCode), nil
+}
 
+// SubscribeMany subscribes to several buses at once, atomically: either every
+// subscription is created or none is, so a partially admitted multi-bus
+// stream can never strand capacity. Codes must be distinct.
+func (h *Hub) SubscribeMany(busCodes []string) ([]*Subscription, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	if h.closed {
+		return nil, ErrClosed
+	}
+	if h.nsubs+len(busCodes) > h.maxSubs {
+		return nil, ErrCapacity
+	}
+	subs := make([]*Subscription, 0, len(busCodes))
+	for _, code := range busCodes {
+		subs = append(subs, h.subscribeLocked(code))
+	}
+	return subs, nil
+}
+
+func (h *Hub) subscribeLocked(busCode string) *Subscription {
 	t, ok := h.topics[busCode]
 	if !ok {
 		ctx, cancel := context.WithCancel(context.Background())
@@ -104,7 +127,7 @@ func (h *Hub) Subscribe(busCode string) (*Subscription, error) {
 	sub := &Subscription{C: ch, ch: ch, hub: h, topic: t}
 	t.subs[sub] = struct{}{}
 	h.nsubs++
-	return sub, nil
+	return sub
 }
 
 func (h *Hub) unsubscribe(s *Subscription) {
@@ -186,7 +209,14 @@ func eventKey(ev Event) string {
 	if ev.Info.Live.Stale {
 		stale = "stale"
 	}
-	return ev.Info.Live.RecordedAt.UTC().Format(time.RFC3339Nano) + "|" + stale
+	source := "live"
+	if ev.Info.Degraded {
+		// Same position, but now served from memory because Chalo is down:
+		// clients must hear about the change of trust even though the fix
+		// itself did not move.
+		source = "degraded"
+	}
+	return ev.Info.Live.RecordedAt.UTC().Format(time.RFC3339Nano) + "|" + stale + "|" + source
 }
 
 func (h *Hub) publish(t *topic, ev Event) {
