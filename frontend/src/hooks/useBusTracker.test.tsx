@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { renderHook, act, waitFor } from '@testing-library/react'
-import { useBusTracker, mergeTrail, trailDistanceMeters, EventSourceLike, MAX_TRAIL_POINTS } from './useBusTracker'
+import { useBusTracker, mergeTrail, trailDistanceMeters, MAX_TRAIL_POINTS } from './useBusTracker'
+import { FakeEventSource, fakeFactory } from '../test/fakeEventSource'
 import { ApiError } from '../services/api'
 import { BusTrackingInfo, PositionFix } from '../types/transit'
 
@@ -23,39 +24,8 @@ function snapshot(code: string, lat = 10, recordedSec = 1000, extra: Partial<Bus
   }
 }
 
-class FakeEventSource implements EventSourceLike {
-  static instances: FakeEventSource[] = []
-  readyState = 0
-  onerror: ((ev: Event) => void) | null = null
-  onopen: ((ev: Event) => void) | null = null
-  closed = false
-  private listeners: Record<string, ((ev: MessageEvent) => void)[]> = {}
-
-  constructor(public url: string) {
-    FakeEventSource.instances.push(this)
-  }
-  addEventListener(type: string, l: (ev: MessageEvent) => void) {
-    ;(this.listeners[type] ||= []).push(l)
-  }
-  close() {
-    this.closed = true
-    this.readyState = 2
-  }
-  open() {
-    this.readyState = 1
-    this.onopen?.(new Event('open'))
-  }
-  emit(type: string, data: unknown) {
-    this.listeners[type]?.forEach(l => l(new MessageEvent(type, { data: JSON.stringify(data) })))
-  }
-  fail(permanently: boolean) {
-    this.readyState = permanently ? 2 : 0
-    this.onerror?.(new Event('error'))
-  }
-}
-
-const factory = (url: string) => new FakeEventSource(url)
-const latest = () => FakeEventSource.instances[FakeEventSource.instances.length - 1]
+const factory = fakeFactory
+const latest = () => FakeEventSource.latest()
 
 function deferred<T>() {
   let resolve!: (v: T) => void
@@ -81,7 +51,7 @@ function makeApi() {
 }
 
 beforeEach(() => {
-  FakeEventSource.instances = []
+  FakeEventSource.reset()
 })
 
 describe('useBusTracker', () => {

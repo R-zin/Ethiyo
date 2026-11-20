@@ -4,10 +4,13 @@
 // awkward ones, so E2E exercises the real code paths:
 //   * /app/api/dashboard/chatbot/raw answers HTTP 202 for BOTH known vehicles
 //     (full payload) and unknown ones (an error body) — just like Chalo.
-//   * Known buses move along a short northbound-then-eastbound path, so
-//     heading, breadcrumb trail and distance are all observable.
+//   * Known buses drive a closed rectangular loop (north, east, south, west),
+//     so heading, breadcrumb trail and distance are all observable, and the
+//     path never "teleports" back to its start.
 //   * /app/public-route/:code serves a page that fires the scheduler
 //     routedetailslive XHR, so headless-browser route discovery works.
+//   * GET /__mock/fail?on=1 makes the live endpoint answer 503 (an outage)
+//     until /__mock/fail?on=0, to exercise degradation and recovery.
 const http = require('http');
 
 const PORT = Number(process.env.MOCK_CHALO_PORT || 9099);
@@ -22,10 +25,15 @@ const KNOWN = {
 
 function positionFor(bus, now) {
   const step = Math.floor(now / STEP_MS);
-  const phase = step % 20; // 10 steps north, then 10 steps east, repeat
-  const north = Math.min(phase, 10) * 0.0009; // ~100 m per step
-  const east = Math.max(phase - 10, 0) * 0.0009;
-  return { lat: bus.lat + north, lon: bus.lon + east, ts: step * STEP_MS };
+  const phase = step % 40; // four legs of 10 steps (~100 m each)
+  const t = phase % 10;
+  const [north, east] = [
+    [t, 0], // heading north
+    [10, t], // east
+    [10 - t, 10], // south
+    [0, 10 - t], // west, back to the start
+  ][Math.floor(phase / 10)];
+  return { lat: bus.lat + north * 0.0009, lon: bus.lon + east * 0.0009, ts: step * STEP_MS };
 }
 
 function sendJSON(res, status, body) {
@@ -33,10 +41,23 @@ function sendJSON(res, status, body) {
   res.end(JSON.stringify(body));
 }
 
+let failing = false;
+
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, `http://localhost:${PORT}`);
 
+  if (url.pathname === '/__mock/fail') {
+    failing = url.searchParams.get('on') === '1';
+    sendJSON(res, 200, { failing });
+    return;
+  }
+
   if (url.pathname === '/app/api/dashboard/chatbot/raw') {
+    if (failing) {
+      res.writeHead(503, { 'Content-Type': 'text/plain' });
+      res.end('Service Unavailable');
+      return;
+    }
     const vehicleNo = (url.searchParams.get('vehicleNo') || '').toUpperCase();
     const bus = KNOWN[vehicleNo];
     if (!bus) {

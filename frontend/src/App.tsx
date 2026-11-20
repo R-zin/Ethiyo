@@ -5,6 +5,8 @@ import { LiveTrackerCard } from './components/tracking/LiveTrackerCard'
 import { TransitMap } from './components/tracking/TransitMap'
 import { RouteDetailsTab } from './components/tracking/RouteDetailsTab'
 import { ProximityCard } from './components/tracking/ProximityCard'
+import { FavoritesPanel } from './components/tracking/FavoritesPanel'
+import { AlertsCard, AlertBanners } from './components/tracking/AlertsCard'
 import { EmptyState } from './components/states/EmptyState'
 import { ErrorState } from './components/states/ErrorState'
 import { SkeletonLoader } from './components/common/SkeletonLoader'
@@ -13,11 +15,11 @@ import { HealthStatus } from './types/transit'
 import { useTheme } from './hooks/useTheme'
 import { useBusTracker } from './hooks/useBusTracker'
 import { useGeolocation } from './hooks/useGeolocation'
-import { Map, Layers } from 'lucide-react'
-
-function normalizeCode(code: string): string {
-  return code.trim().toUpperCase()
-}
+import { useFavorites } from './hooks/useFavorites'
+import { useFleet } from './hooks/useFleet'
+import { useAlerts } from './hooks/useAlerts'
+import { normalizeCode } from './utils/busCode'
+import { Map, Layers, Download } from 'lucide-react'
 
 function readCodeFromUrl(): string {
   return normalizeCode(new URLSearchParams(window.location.search).get('code') || '')
@@ -29,6 +31,8 @@ export function App() {
   const [activeTab, setActiveTab] = useState<'map' | 'route'>('map')
   const tracker = useBusTracker(activeCode)
   const geo = useGeolocation()
+  const favorites = useFavorites()
+  const fleet = useFleet(favorites.favorites)
 
   // System health
   const [health, setHealth] = useState<HealthStatus | null>(null)
@@ -70,6 +74,12 @@ export function App() {
 
   const { tracking, error, isLoading } = tracker
   const live = tracking?.live
+  const alerts = useAlerts({
+    busCode: tracking?.bus_code ?? '',
+    live,
+    degraded: tracking?.degraded,
+    user: geo.position,
+  })
 
   return (
     <div className="min-h-full flex flex-col bg-nordic-50 dark:bg-nordic-950 text-nordic-900 dark:text-nordic-100 selection:bg-frost-500 selection:text-white">
@@ -85,6 +95,17 @@ export function App() {
         <section aria-label="Route Search" className="max-w-2xl mx-auto w-full">
           <SearchBar onSearch={handleSearch} isLoading={isLoading} initialCode={activeCode} />
         </section>
+
+        <FavoritesPanel
+          favorites={favorites.favorites}
+          entries={fleet.entries}
+          mode={fleet.mode}
+          activeCode={tracking?.bus_code}
+          onSelect={handleSearch}
+          onRemove={favorites.remove}
+        />
+
+        <AlertBanners alerts={alerts.alerts} onDismiss={alerts.dismiss} />
 
         <div className="pt-2">
           {isLoading && !tracking ? (
@@ -109,6 +130,9 @@ export function App() {
                 warning={tracker.warning}
                 distanceM={tracker.distanceM}
                 trailPoints={tracker.trail.length}
+                isFavorite={favorites.isFavorite(tracking.bus_code)}
+                favoriteDisabled={favorites.isFull}
+                onToggleFavorite={() => favorites.toggle(tracking.bus_code)}
               />
 
               <ProximityCard
@@ -117,6 +141,16 @@ export function App() {
                 position={geo.position}
                 onStart={geo.start}
                 onStop={geo.stop}
+              />
+
+              <AlertsCard
+                busCode={tracking.bus_code}
+                config={alerts.config}
+                permission={alerts.permission}
+                locationStatus={geo.status}
+                onApproachChange={alerts.setApproachMinutes}
+                onOfflineChange={alerts.setOffline}
+                onEnableLocation={geo.start}
               />
 
               {/* View Switcher Tabs (Map View vs Route Spec) */}
@@ -161,8 +195,33 @@ export function App() {
                   </button>
                 </div>
 
-                <div className="text-xs text-nordic-400 hidden sm:block font-mono">
-                  {!live ? 'No GPS fix' : live.stale ? 'Stale position' : 'Live GPS'}
+                <div className="flex items-center gap-3 text-xs text-nordic-400 font-mono">
+                  {tracker.trail.length > 0 && (
+                    <span className="flex items-center gap-1.5" data-testid="trail-export">
+                      <Download className="w-3.5 h-3.5" />
+                      <span className="hidden sm:inline">Trail:</span>
+                      <a
+                        href={TransitApi.trailExportUrl(tracking.bus_code, 'geojson')}
+                        download
+                        className="text-frost-600 dark:text-frost-400 hover:underline"
+                        aria-label={`Download ${tracking.bus_code} trail as GeoJSON`}
+                      >
+                        GeoJSON
+                      </a>
+                      <span aria-hidden="true">·</span>
+                      <a
+                        href={TransitApi.trailExportUrl(tracking.bus_code, 'gpx')}
+                        download
+                        className="text-frost-600 dark:text-frost-400 hover:underline"
+                        aria-label={`Download ${tracking.bus_code} trail as GPX`}
+                      >
+                        GPX
+                      </a>
+                    </span>
+                  )}
+                  <span className="hidden sm:inline">
+                    {!live ? 'No GPS fix' : tracking.degraded ? 'Last known' : live.stale ? 'Stale position' : 'Live GPS'}
+                  </span>
                 </div>
               </div>
 

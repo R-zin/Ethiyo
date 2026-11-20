@@ -84,3 +84,18 @@ describe('TransitApi', () => {
     expect(fetchMock).toHaveBeenCalledWith('/api/v1/bus/A/history', expect.anything())
   })
 })
+
+describe('fleet and export URLs', () => {
+  it('requests several buses in one call', async () => {
+    const fetchMock = vi.fn(async () => jsonResponse(200, { success: true, data: { buses: [] } }))
+    vi.stubGlobal('fetch', fetchMock)
+    await TransitApi.trackMany([' ks602', 'dl1pc0001 '])
+    expect(fetchMock).toHaveBeenCalledWith('/api/v1/buses/track?codes=KS602,DL1PC0001', expect.anything())
+  })
+
+  it('builds the multi-bus stream and trail export URLs', () => {
+    expect(TransitApi.fleetStreamUrl(['a1', 'B2'])).toBe('/api/v1/buses/stream?codes=A1,B2')
+    expect(TransitApi.trailExportUrl('ks602', 'gpx')).toBe('/api/v1/bus/KS602/history?format=gpx')
+    expect(TransitApi.trailExportUrl('ks602', 'geojson')).toBe('/api/v1/bus/KS602/history?format=geojson')
+  })
+})

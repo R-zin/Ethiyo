@@ -1,4 +1,4 @@
-import { BusTrackingInfo, BusRouteInfo, BusHistory, HealthStatus } from '../types/transit'
+import { BusTrackingInfo, BusRouteInfo, BusHistory, FleetResponse, HealthStatus } from '../types/transit'
 
 const API_BASE = import.meta.env.VITE_API_URL || ''
 
@@ -80,6 +80,11 @@ async function request<T>(endpoint: string, { timeoutMs = TIMEOUTS.default, ...o
 const busPath = (busCode: string, leaf: string) =>
   `/api/v1/bus/${encodeURIComponent(busCode.trim().toUpperCase())}/${leaf}`
 
+const codesParam = (codes: string[]) =>
+  codes.map(c => encodeURIComponent(c.trim().toUpperCase())).join(',')
+
+export type TrailFormat = 'geojson' | 'gpx'
+
 export const TransitApi = {
   trackBus(busCode: string, signal?: AbortSignal): Promise<BusTrackingInfo> {
     return request<BusTrackingInfo>(busPath(busCode, 'track'), { signal })
@@ -96,6 +101,21 @@ export const TransitApi = {
   /** URL of the server-sent events stream for live position updates. */
   streamUrl(busCode: string): string {
     return `${API_BASE}${busPath(busCode, 'stream')}`
+  },
+
+  /** Live positions for several buses in one request (max 20). */
+  trackMany(codes: string[], signal?: AbortSignal): Promise<FleetResponse> {
+    return request<FleetResponse>(`/api/v1/buses/track?codes=${codesParam(codes)}`, { signal })
+  },
+
+  /** One SSE connection for several buses (browsers cap connections per origin). */
+  fleetStreamUrl(codes: string[]): string {
+    return `${API_BASE}/api/v1/buses/stream?codes=${codesParam(codes)}`
+  },
+
+  /** Download URL for a bus's trail as GeoJSON or GPX. */
+  trailExportUrl(busCode: string, format: TrailFormat): string {
+    return `${API_BASE}${busPath(busCode, 'history')}?format=${format}`
   },
 
   async checkHealth(): Promise<HealthStatus> {

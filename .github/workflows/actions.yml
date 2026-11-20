@@ -141,6 +141,8 @@ jobs:
           # arrow, breadcrumb trail) within seconds.
           STREAM_POLL_INTERVAL: 2s
           LIVE_CACHE_TTL: 1s
+          # Short cooldown so the simulated Chalo outage recovers quickly.
+          UPSTREAM_BREAKER_COOLDOWN: 3s
         run: |
           ./bin/server > backend.log 2>&1 &
           echo "BACKEND_PID=$!" >> $GITHUB_ENV
@@ -174,11 +176,30 @@ jobs:
             sleep 1
           done
 
+      - name: Start production preview server (PWA checks)
+        run: |
+          npm --prefix frontend run preview -- --port 4173 --strictPort > preview.log 2>&1 &
+          echo "PREVIEW_PID=$!" >> $GITHUB_ENV
+          for i in $(seq 1 30); do
+            if curl -s http://localhost:4173 | grep -q "Ethiyo"; then
+              echo "Preview server is ready!"
+              break
+            fi
+            if [ $i -eq 30 ]; then
+              echo "Preview server failed to start within 30 seconds:"
+              cat preview.log
+              exit 1
+            fi
+            sleep 1
+          done
+
       - name: Run browser E2E integration test suite
         env:
           BROWSER_PATH: /usr/bin/chromium
           SCREENSHOT_DIR: ${{ github.workspace }}/e2e-screenshots
           APP_URL: http://localhost:3000
+          PWA_URL: http://localhost:4173
+          MOCK_URL: http://localhost:9099
         run: npm --prefix frontend run test:e2e
 
       - name: Upload E2E screenshots and test report
@@ -190,6 +211,7 @@ jobs:
             e2e-screenshots/
             backend.log
             frontend.log
+            preview.log
           retention-days: 14
 
       - name: Teardown background servers
@@ -197,6 +219,7 @@ jobs:
         run: |
           kill -9 $BACKEND_PID 2>/dev/null || true
           kill -9 $FRONTEND_PID 2>/dev/null || true
+          kill -9 $PREVIEW_PID 2>/dev/null || true
           kill -9 $MOCK_PID 2>/dev/null || true
 
   build:

@@ -12,6 +12,8 @@ import {
   Check,
   AlertTriangle,
   Pause,
+  Star,
+  CloudOff,
 } from 'lucide-react'
 import { ApiErrorBody, BusTrackingInfo, ConnectionMode } from '../../types/transit'
 import { StatusBadge } from '../common/StatusBadge'
@@ -30,6 +32,9 @@ interface LiveTrackerCardProps {
   warning?: ApiErrorBody | null
   distanceM?: number
   trailPoints?: number
+  isFavorite?: boolean
+  favoriteDisabled?: boolean
+  onToggleFavorite?: () => void
 }
 
 const MODE_LABEL: Record<ConnectionMode, string> = {
@@ -65,6 +70,9 @@ export function LiveTrackerCard({
   warning,
   distanceM = 0,
   trailPoints = 0,
+  isFavorite = false,
+  favoriteDisabled = false,
+  onToggleFavorite,
 }: LiveTrackerCardProps) {
   useTicker(5000)
   const [shared, setShared] = useState(false)
@@ -90,8 +98,15 @@ export function LiveTrackerCard({
     }
   }
 
-  const signalVariant = !hasLiveGps ? 'idle' : isStale ? 'warning' : 'active'
-  const signalLabel = !hasLiveGps ? 'No GPS Fix' : isStale ? 'Stale Signal' : 'Live Telemetry'
+  const isDegraded = !!data.degraded
+  const signalVariant = !hasLiveGps ? 'idle' : isStale || isDegraded ? 'warning' : 'active'
+  const signalLabel = !hasLiveGps
+    ? 'No GPS Fix'
+    : isDegraded
+    ? 'Last Known Position'
+    : isStale
+    ? 'Stale Signal'
+    : 'Live Telemetry'
 
   return (
     <div className="bg-white dark:bg-nordic-900 border border-nordic-200/80 dark:border-nordic-800 rounded-lg p-5 sm:p-6 shadow-sm">
@@ -106,7 +121,7 @@ export function LiveTrackerCard({
               <h2 className="text-xl font-bold tracking-tight text-nordic-900 dark:text-white font-mono">
                 {data.bus_code}
               </h2>
-              <StatusBadge variant={signalVariant} pulse={hasLiveGps && !isStale}>
+              <StatusBadge variant={signalVariant} pulse={hasLiveGps && !isStale && !isDegraded}>
                 {signalLabel}
               </StatusBadge>
             </div>
@@ -124,6 +139,26 @@ export function LiveTrackerCard({
 
         {/* Live-update & action controls */}
         <div className="flex flex-wrap items-center gap-2">
+          {onToggleFavorite && (
+            <button
+              type="button"
+              onClick={onToggleFavorite}
+              disabled={favoriteDisabled && !isFavorite}
+              data-testid="favorite-toggle"
+              aria-pressed={isFavorite}
+              aria-label={isFavorite ? `Remove ${data.bus_code} from My buses` : `Save ${data.bus_code} to My buses`}
+              title={
+                favoriteDisabled && !isFavorite ? 'My buses is full' : isFavorite ? 'Saved to My buses' : 'Save to My buses'
+              }
+              className={`p-1.5 rounded-md border transition-colors disabled:opacity-50 ${
+                isFavorite
+                  ? 'border-amber-300 bg-amber-50 text-amber-600 dark:border-amber-700 dark:bg-amber-950/40 dark:text-amber-400'
+                  : 'border-nordic-200 dark:border-nordic-800 text-nordic-700 dark:text-nordic-200 hover:bg-nordic-50 dark:hover:bg-nordic-800'
+              }`}
+            >
+              <Star className={`w-4 h-4 ${isFavorite ? 'fill-amber-400' : ''}`} />
+            </button>
+          )}
           <button
             type="button"
             onClick={onTogglePaused}
@@ -182,7 +217,21 @@ export function LiveTrackerCard({
         </div>
       </div>
 
-      {warning && (
+      {isDegraded && (
+        <div
+          role="status"
+          data-testid="degraded-banner"
+          className="mt-4 px-3 py-2 rounded-md border border-amber-200 dark:border-amber-900/60 bg-amber-50 dark:bg-amber-950/30 text-xs text-amber-700 dark:text-amber-400 flex items-start gap-2"
+        >
+          <CloudOff className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+          <span>
+            Chalo isn't responding. Showing the last known position, recorded{' '}
+            {formatRelativeTime(live?.recorded_at).toLowerCase()}. Updates resume automatically.
+          </span>
+        </div>
+      )}
+
+      {warning && !isDegraded && (
         <div
           role="status"
           className="mt-4 px-3 py-2 rounded-md border border-amber-200 dark:border-amber-900/60 bg-amber-50 dark:bg-amber-950/30 text-xs text-amber-700 dark:text-amber-400 flex items-start gap-2"

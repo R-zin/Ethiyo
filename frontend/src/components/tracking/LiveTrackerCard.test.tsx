@@ -89,3 +89,38 @@ describe('LiveTrackerCard', () => {
     expect(screen.getByText('Awaiting movement')).toBeDefined()
   })
 })
+
+describe('LiveTrackerCard favorites and degraded mode', () => {
+  it('toggles the bus in My buses', () => {
+    const onToggleFavorite = vi.fn()
+    renderCard({ onToggleFavorite })
+    const star = screen.getByTestId('favorite-toggle')
+    expect(star.getAttribute('aria-pressed')).toBe('false')
+    expect(star.getAttribute('aria-label')).toBe('Save KS602 to My buses')
+    fireEvent.click(star)
+    expect(onToggleFavorite).toHaveBeenCalledOnce()
+  })
+
+  it('cannot add to a full list but can still remove', () => {
+    renderCard({ onToggleFavorite: vi.fn(), favoriteDisabled: true })
+    expect((screen.getByTestId('favorite-toggle') as HTMLButtonElement).disabled).toBe(true)
+  })
+
+  it('reports a saved bus as pressed', () => {
+    renderCard({ onToggleFavorite: vi.fn(), isFavorite: true, favoriteDisabled: true })
+    const star = screen.getByTestId('favorite-toggle') as HTMLButtonElement
+    expect(star.getAttribute('aria-pressed')).toBe('true')
+    expect(star.disabled).toBe(false)
+  })
+
+  it('makes a degraded (last known) position unmistakable', () => {
+    renderCard({
+      data: { ...apiPayload, degraded: true },
+      warning: { code: 'UPSTREAM_CHALO_ERROR', message: 'Upstream Chalo service failure' },
+    })
+    expect(screen.getByText('Last Known Position')).toBeDefined()
+    expect(screen.getByTestId('degraded-banner').textContent).toContain("Chalo isn't responding")
+    // One explanation at a time: the generic warning is folded into the banner.
+    expect(screen.queryByText(/Live feed issue/)).toBeNull()
+  })
+})

@@ -28,6 +28,8 @@ export interface BusTrackingInfo {
   bus_code: string
   tracking_url: string
   live?: BusLiveInfo
+  /** True when Chalo is unreachable and `live` is the last known position */
+  degraded?: boolean
 }
 
 export interface BusRouteInfo {
@@ -54,11 +56,38 @@ export interface ApiErrorBody {
   message: string
 }
 
+/** Circuit-breaker view of the Chalo upstream (see /health). */
+export interface UpstreamStatus {
+  state: 'closed' | 'open' | 'half_open'
+  consecutive_failures: number
+  last_success?: string
+  last_failure?: string
+  retry_after_seconds?: number
+}
+
 export interface HealthStatus {
   message: string
   status: string
   browser: boolean
+  degraded?: boolean
+  upstream?: UpstreamStatus
   latencyMs?: number
+}
+
+/** One bus in a multi-bus response: exactly one of tracking/error is set. */
+export interface FleetItem {
+  bus_code: string
+  tracking?: BusTrackingInfo
+  error?: ApiErrorBody
+}
+
+export interface FleetResponse {
+  buses: FleetItem[]
+}
+
+/** Payload of a `bus_error` event on the multi-bus stream. */
+export interface BusErrorEvent extends ApiErrorBody {
+  bus_code: string
 }
 
 /** How the UI is currently receiving position updates. */

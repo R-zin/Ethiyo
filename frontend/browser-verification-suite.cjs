@@ -37,6 +37,28 @@ function findBrowser() {
 
 const BROWSER_BIN = findBrowser();
 const APP_URL = process.env.APP_URL || 'http://localhost:3000';
+const MOCK_URL = process.env.MOCK_URL || 'http://localhost:9099';
+// Optional: a production build (vite preview) to verify the installable PWA.
+const PWA_URL = process.env.PWA_URL || '';
+
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+
+// Toggles the mock upstream's simulated Chalo outage.
+async function setMockOutage(on) {
+  const res = await fetch(`${MOCK_URL}/__mock/fail?on=${on ? 1 : 0}`);
+  if (!res.ok) throw new Error(`mock outage switch failed: ${res.status}`);
+}
+
+// Polls fn() until it returns a truthy value or the timeout passes.
+async function waitUntil(fn, timeoutMs, intervalMs = 500) {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const value = await fn();
+    if (value) return value;
+    if (Date.now() > deadline) return value;
+    await sleep(intervalMs);
+  }
+}
 
 const SCREENSHOT_DIR = process.env.SCREENSHOT_DIR || path.join(__dirname, 'screenshots');
 
@@ -141,11 +163,28 @@ async function runVerification() {
 
     // Grant geolocation for the "How far is my bus?" feature, placing the
     // viewer ~3 km south of the mock KS602 route.
-    await browser.defaultBrowserContext().overridePermissions(APP_URL, ['geolocation']);
+    await browser.defaultBrowserContext().overridePermissions(APP_URL, ['geolocation', 'notifications']);
     await page.setGeolocation({ latitude: 11.1789, longitude: 75.8115, accuracy: 10 });
+
+    // Record system notifications the app raises (arrival alerts).
+    await page.evaluateOnNewDocument(() => {
+      window.__notifications = [];
+      const Native = window.Notification;
+      if (!Native) return;
+      function Recording(title, opts) {
+        window.__notifications.push({ title, body: opts && opts.body });
+        return new Native(title, opts);
+      }
+      Object.defineProperty(Recording, 'permission', { get: () => Native.permission });
+      Recording.requestPermission = (...args) => Native.requestPermission(...args);
+      Recording.prototype = Native.prototype;
+      window.Notification = Recording;
+    });
 
     // Force initial light theme via evaluateOnNewDocument
     await page.evaluateOnNewDocument(() => {
+      // The browser profile persists between runs; start without saved buses.
+      localStorage.removeItem('ethiyo_favorites');
       localStorage.setItem('ethiyo-theme', 'light');
     });
 
@@ -300,6 +339,82 @@ async function runVerification() {
         rendered: !!proximityText && /km away/.test(proximityText) && /min at current speed/.test(proximityText),
         text: proximityText,
       };
+
+      // Arrival alert: the bus is ~3-4 km away at 28.5 km/h (ETA ≈ 6-9 min),
+      // so arming "≤ 15 min" must fire at once — as an in-page banner and as
+      // a browser notification.
+      console.log('\n[Step 3c] Testing arrival alerts...');
+      let alertTitle = null;
+      let notifications = [];
+      try {
+        await page.select('#approach-alert', '15');
+        await page.waitForSelector('[data-testid="alert-banner"][data-kind="approach"]', { timeout: 10000 });
+        alertTitle = await page.$eval('[data-testid="alert-banner"][data-kind="approach"]', el => el.textContent);
+        notifications = await page.evaluate(() => window.__notifications || []);
+      } catch (e) {
+        console.warn('Arrival alert did not fire:', e.message);
+      }
+      console.log('Alert banner:', alertTitle, '| notifications raised:', notifications.map(n => n.title));
+      const shotAlert = path.join(SCREENSHOT_DIR, '03c-arrival-alert.png');
+      await page.screenshot({ path: shotAlert, fullPage: false });
+      report.screenshots.push({ name: '03c-arrival-alert.png', path: shotAlert, label: 'Arrival alert fired' });
+      report.interactions.alerts = {
+        bannerShown: !!alertTitle && alertTitle.includes('almost here'),
+        notified: notifications.some(n => n.title.includes('KS602 is almost here')),
+      };
+      // Dismiss so later steps' role="alert" checks only see what they expect.
+      await page.evaluate(() => document.querySelectorAll('[aria-label="Dismiss alert"]').forEach(b => b.click()));
+
+      // My buses: star KS602, then DL1PC0001; both must show live status
+      // delivered over ONE multi-bus stream.
+      console.log('\n[Step 3d] Testing My buses (favorites + multi-bus stream)...');
+      const favorites = { cards: 0, allLive: false, fleetLive: false };
+      try {
+        const saveCurrentBus = async () => {
+          const pressed = await page.$eval('[data-testid="favorite-toggle"]', el => el.getAttribute('aria-pressed'));
+          if (pressed !== 'true') await page.click('[data-testid="favorite-toggle"]');
+        };
+        await saveCurrentBus();
+        await page.waitForSelector('[data-testid="favorite-card"][data-code="KS602"]', { timeout: 10000 });
+
+        // Replace the search text via the app's own clear button (a
+        // triple-click does not reliably select a controlled input's value).
+        await page.click('button[aria-label="Clear input"]');
+        await page.type('#bus-search-input', 'DL1PC0001');
+        await page.keyboard.press('Enter');
+        await page.waitForFunction(
+          () => document.querySelector('[data-testid="connection-mode"]') && document.querySelector('h2.font-mono')?.textContent === 'DL1PC0001',
+          { timeout: 15000 }
+        );
+        await saveCurrentBus();
+
+        const settled = await waitUntil(
+          () =>
+            page.evaluate(() => {
+              const cards = Array.from(document.querySelectorAll('[data-testid="favorite-card"]'));
+              const mode = document.querySelector('[data-testid="fleet-mode"]')?.getAttribute('data-mode');
+              return cards.length === 2 && cards.every(c => c.getAttribute('data-status') === 'Live') && mode === 'live'
+                ? { cards: cards.length, allLive: true, fleetLive: true }
+                : null;
+            }),
+          15000
+        );
+        Object.assign(favorites, settled || {});
+        if (!settled) {
+          favorites.cards = await page.$$eval('[data-testid="favorite-card"]', els => els.length);
+        }
+
+        // Back to KS602 from its saved card.
+        await page.click('[data-testid="favorite-card"][data-code="KS602"] button[aria-label^="Track bus KS602"]');
+        await page.waitForFunction(() => document.querySelector('h2.font-mono')?.textContent === 'KS602', { timeout: 15000 });
+      } catch (e) {
+        console.warn('My buses flow failed:', e.message);
+      }
+      console.log('My buses:', favorites);
+      report.interactions.favorites = favorites;
+      const shotFav = path.join(SCREENSHOT_DIR, '03d-my-buses.png');
+      await page.screenshot({ path: shotFav, fullPage: true });
+      report.screenshots.push({ name: '03d-my-buses.png', path: shotFav, label: 'My buses with live status' });
     }
 
     // ==========================================
@@ -349,6 +464,57 @@ async function runVerification() {
     }
 
     // ==========================================
+    // STEP 4b: CHALO OUTAGE -> DEGRADED MODE -> RECOVERY
+    // ==========================================
+    console.log('\n[Step 4b] Testing graceful degradation during a simulated Chalo outage...');
+    const degraded = { banner: false, offlineAlert: false, fleetLastKnown: false, headerDegraded: false, recovered: false };
+    try {
+      await page.click('#offline-alert'); // "Notify me if it stops reporting"
+      await setMockOutage(true);
+
+      await page.waitForSelector('[data-testid="degraded-banner"]', { timeout: 15000 });
+      degraded.banner = true;
+      degraded.offlineAlert = !!(await waitUntil(
+        () => page.$('[data-testid="alert-banner"][data-kind="offline"]'),
+        5000
+      ));
+      degraded.fleetLastKnown = !!(await waitUntil(
+        () =>
+          page.evaluate(() =>
+            Array.from(document.querySelectorAll('[data-testid="favorite-card"]')).every(
+              c => c.getAttribute('data-status') === 'Last known'
+            )
+          ),
+        15000
+      ));
+      // The breaker opens after repeated failures; refresh the header status.
+      degraded.headerDegraded = !!(await waitUntil(async () => {
+        await page.click('[data-testid="api-status"]');
+        await sleep(300);
+        return page.$eval('[data-testid="api-status"]', el => el.getAttribute('data-state') === 'degraded');
+      }, 20000, 1000));
+
+      const shotDeg = path.join(SCREENSHOT_DIR, '04b-degraded-mode.png');
+      await page.screenshot({ path: shotDeg, fullPage: true });
+      report.screenshots.push({ name: '04b-degraded-mode.png', path: shotDeg, label: 'Chalo outage: last known positions' });
+    } catch (e) {
+      console.warn('Degraded mode checks failed:', e.message);
+    } finally {
+      await setMockOutage(false);
+    }
+    try {
+      // Recovery only counts if degradation was actually observed first.
+      degraded.recovered =
+        degraded.banner &&
+        !!(await waitUntil(async () => !(await page.$('[data-testid="degraded-banner"]')), 25000));
+    } catch (e) {
+      console.warn('Recovery check failed:', e.message);
+    }
+    await page.evaluate(() => document.querySelectorAll('[aria-label="Dismiss alert"]').forEach(b => b.click()));
+    console.log('Degraded mode:', degraded);
+    report.interactions.degraded = degraded;
+
+    // ==========================================
     // STEP 5: SEARCH INVALID BUS CODE -> ERROR STATE RECOVERY
     // ==========================================
     console.log('\n[Step 5] Testing Search for Invalid Bus Code & Error State Recovery...');
@@ -373,11 +539,11 @@ async function runVerification() {
       await page.keyboard.press('Enter');
 
       console.log('Submitted search for UNKNOWN_BUS_999. Waiting for error response...');
-      await page.waitForSelector('[role="alert"]', { timeout: 15000 });
+      await page.waitForSelector('[data-testid="error-state"]', { timeout: 15000 });
       await new Promise(r => setTimeout(r, 800));
 
       const errorHeading = await page.evaluate(() => {
-        const heading = document.querySelector('[role="alert"] h2');
+        const heading = document.querySelector('[data-testid="error-state"] h2');
         return heading ? heading.textContent : null;
       });
       console.log('Error state alert heading:', errorHeading);
@@ -457,6 +623,63 @@ async function runVerification() {
       console.log('Captured:', shotPath);
     }
 
+    // ==========================================
+    // STEP 8: INSTALLABLE APP (PWA) ON THE PRODUCTION BUILD
+    // ==========================================
+    if (PWA_URL) {
+      console.log(`\n[Step 8] Verifying the installable app against ${PWA_URL}...`);
+      const pwa = { manifest: false, serviceWorker: false, noLiveDataCached: false, offlineShell: false };
+      const pwaPage = await browser.newPage();
+      try {
+        await pwaPage.goto(PWA_URL, { waitUntil: 'networkidle0', timeout: 20000 });
+        const manifest = await pwaPage.evaluate(async () => {
+          const link = document.querySelector('link[rel="manifest"]');
+          if (!link) return null;
+          return (await fetch(link.href)).json();
+        });
+        pwa.manifest =
+          !!manifest &&
+          manifest.display === 'standalone' &&
+          manifest.icons.some(i => i.sizes === '512x512') &&
+          manifest.icons.some(i => i.purpose === 'maskable');
+
+        await pwaPage.evaluate(() => navigator.serviceWorker.ready);
+        await pwaPage.reload({ waitUntil: 'networkidle0' });
+        pwa.serviceWorker = await pwaPage.evaluate(() => !!navigator.serviceWorker.controller);
+
+        // Exercise live endpoints, then confirm none of them were cached.
+        await pwaPage.evaluate(() => fetch('/api/v1/bus/KS602/track').then(r => r.text()));
+        const cached = await pwaPage.evaluate(async () => {
+          const paths = [];
+          for (const key of await caches.keys()) {
+            const cache = await caches.open(key);
+            for (const req of await cache.keys()) paths.push(new URL(req.url).pathname);
+          }
+          return paths;
+        });
+        console.log('Cached paths:', cached);
+        pwa.noLiveDataCached =
+          cached.includes('/') && !cached.some(p => p.startsWith('/api/') || p.startsWith('/health') || p.startsWith('/metrics'));
+
+        await pwaPage.setOfflineMode(true);
+        await pwaPage.reload({ waitUntil: 'domcontentloaded' });
+        await pwaPage.waitForSelector('#bus-search-input', { timeout: 10000 });
+        pwa.offlineShell = true;
+        const shotPwa = path.join(SCREENSHOT_DIR, '08-pwa-offline-shell.png');
+        await pwaPage.screenshot({ path: shotPwa });
+        report.screenshots.push({ name: '08-pwa-offline-shell.png', path: shotPwa, label: 'Installed app shell while offline' });
+      } catch (e) {
+        console.warn('PWA checks failed:', e.message);
+      } finally {
+        await pwaPage.setOfflineMode(false).catch(() => {});
+        await pwaPage.close();
+      }
+      console.log('PWA:', pwa);
+      report.interactions.pwa = pwa;
+    } else {
+      console.log('\n[Step 8] PWA checks skipped (set PWA_URL to a production build, e.g. vite preview).');
+    }
+
     console.log('\n=== BROWSER TESTING SUITE COMPLETE ===');
     console.log('Clean Console:', report.cleanConsole ? 'PASS (0 unexpected errors/warnings)' : 'FAIL');
     if (!report.cleanConsole) {
@@ -478,8 +701,20 @@ async function runVerification() {
       proximity: !!report.interactions.proximity?.rendered,
       routeDiscovery: !!report.interactions.routeDiscovery?.discovered,
       notFoundError: !!report.interactions.errorState?.isNotFound,
+      arrivalAlert: !!report.interactions.alerts?.bannerShown && !!report.interactions.alerts?.notified,
+      myBuses: report.interactions.favorites?.cards === 2 && !!report.interactions.favorites?.allLive && !!report.interactions.favorites?.fleetLive,
+      degradedMode: !!report.interactions.degraded?.banner && !!report.interactions.degraded?.offlineAlert && !!report.interactions.degraded?.fleetLastKnown,
+      degradedHeader: !!report.interactions.degraded?.headerDegraded,
+      recovery: !!report.interactions.degraded?.recovered,
       noHorizontalScroll: !Object.values(report.responsiveChecks).some(c => c.hasHorizontalScroll),
     };
+    if (PWA_URL) {
+      const pwa = report.interactions.pwa || {};
+      checks.pwaManifest = !!pwa.manifest;
+      checks.pwaServiceWorker = !!pwa.serviceWorker;
+      checks.pwaNoLiveDataCached = !!pwa.noLiveDataCached;
+      checks.pwaOfflineShell = !!pwa.offlineShell;
+    }
     report.checks = checks;
     fs.writeFileSync(reportPath, JSON.stringify(report, null, 2));
     console.log('\nCriteria:');

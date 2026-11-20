@@ -27,6 +27,12 @@ Ethiyo automates this lifecycle:
 - **Caching with Request Coalescing**: Live positions are cached briefly (5s) and expensive headless-browser route discoveries for longer (10m). Concurrent identical requests share a single upstream call.
 - **Prometheus Metrics**: Dependency-free `/metrics` with per-route request rates and latency, upstream Chalo outcomes, cache hit ratio, live-stream counts and browser-pool pressure.
 - **"How Far Is My Bus?"**: The web app can show straight-line distance and an approximate ETA from your location. It is opt-in, and your location never leaves the browser.
+- **My Buses (Saved Buses)**: Star buses to pin them to the home screen with live status for each. `GET /api/v1/buses/track` fetches up to 20 buses in one request, and `GET /api/v1/buses/stream` keeps them all live over a **single** connection (browsers allow only about 6 connections per site).
+- **Arrival and Disruption Alerts**: "Notify me when my bus is ≤ N minutes away" and "notify me if it stops reporting", as browser notifications plus in-page banners. Evaluated on your device; alerts work while the page is open.
+- **Graceful Degradation**: A circuit breaker pauses calls to Chalo after repeated failures. While Chalo is down, each bus's **last known position** is served flagged `degraded: true` instead of an error. Chalo's status shows in `/health`, `/metrics` and the app header.
+- **Trail Export**: Download a bus's recent path as GeoJSON or GPX (`/history?format=geojson|gpx`).
+- **OpenAPI 3.1**: The API is described at `/api/v1/openapi.json`. Tests fail if a route or model field drifts from the document.
+- **Installable App (PWA)**: Add to home screen, with an offline app shell. Live data is never cached.
 - **Live GPS Tracking**: Fetches real-time bus positions (lat/lon, speed, next/previous stop, route name) directly from Chalo's `dashboard/chatbot/raw?vehicleNo=` endpoint — no headless browser required for the tracking hot path.
 - **Automated Route Discovery**: Intercepts `routedetailslive` (and legacy `route-live-info`) endpoints via headless browser events for scheduler/route data.
 - **Cross-Platform Browser Discovery**: Automatically locates Chrome, Chromium, Brave, or Microsoft Edge on Windows, macOS, and Linux without hardcoded paths.
@@ -155,6 +161,9 @@ cp .env.example .env
 | `STREAM_HEARTBEAT` | duration | `15s` | Keep-alive comment interval on idle streams |
 | `STREAM_MAX_LIFETIME` | duration | `30m` | Maximum duration of one stream connection (clients reconnect automatically) |
 | `METRICS_ENABLED` | bool | `true` | Expose Prometheus metrics at `/metrics` |
+| `UPSTREAM_BREAKER_THRESHOLD` | int | `5` | Consecutive Chalo failures that open the circuit breaker |
+| `UPSTREAM_BREAKER_COOLDOWN` | duration | `30s` | How long calls to Chalo are paused before a single trial request |
+| `LAST_KNOWN_TTL` | duration | `15m` | How long a bus's last known position may be served (flagged `degraded`) while Chalo fails; `0s` disables |
 
 Unparseable values are logged as a warning and the default is used.
 
@@ -205,12 +214,25 @@ Example startup log:
 ### 1. Health Checks
 
 #### `GET /health` or `GET /api/v1/health`
-Checks server status and browser availability.
+Checks server status and browser availability. Also reports Chalo's health. It always returns 200 while the process can serve requests, so a Chalo outage never makes a load balancer restart a healthy instance:
+
+```json
+{
+  "status": "healthy",
+  "browser": true,
+  "degraded": false,
+  "upstream": { "state": "closed", "consecutive_failures": 0, "last_success": "2026-11-20T04:39:35Z" }
+}
+```
+
+`upstream.state` is `closed` (healthy), `open` (calls paused; `retry_after_seconds` says for how long) or `half_open` (the next call is a trial).
 
 ### 2. V1 Bus Transit APIs
 
 #### `GET /api/v1/bus/:buscode/track`
 Returns the live position snapshot and tracking URL for the specified bus code, fetched directly from Chalo's vehicle-tracking API (no browser required). Includes real-time GPS coordinates, speed, route name, and next/previous stop when the bus is actively reporting.
+
+When Chalo is failing, the bus's last known position is returned with `"degraded": true` (for up to `LAST_KNOWN_TTL`). A bus with no recent position gets `503 UPSTREAM_UNAVAILABLE`, with `Retry-After` set to the remaining breaker cooldown.
 
 #### `GET /api/v1/bus/:buscode/route`
 Returns both the live tracking URL and the live scheduler route URL.
@@ -220,6 +242,8 @@ Returns a compact tracking URL payload. An unknown bus returns `404 BUS_NOT_FOUN
 
 #### `GET /api/v1/bus/:buscode/history`
 Returns the recent breadcrumb trail of a bus (oldest point first, up to 60 fixes) and the distance travelled along it. A bus that has just gone offline still returns its last known trail.
+
+Add `?format=geojson` (an RFC 7946 FeatureCollection with a LineString plus one Point per fix) or `?format=gpx` (a GPX 1.1 track) to download the trail as a file. Any other value returns `400 INVALID_FORMAT`.
 
 #### `GET /api/v1/bus/:buscode/stream`
 A [server-sent events](https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events) stream of live positions. Validation, unknown-bus and capacity errors are returned as normal JSON errors *before* the stream starts. After that the stream emits:
@@ -234,6 +258,29 @@ A `: ping` comment is sent every `STREAM_HEARTBEAT`. When capacity is full the e
 ```bash
 curl -N http://localhost:8080/api/v1/bus/KS602/stream
 ```
+
+#### `GET /api/v1/buses/track?codes=KS602,DL1PC0001`
+Live positions for up to 20 buses (duplicates are ignored). Results come back in request order, one per bus, each with either `tracking` (the same object as `/track`) or `error`. One failing bus never fails the whole request:
+
+```json
+{
+  "success": true,
+  "data": {
+    "buses": [
+      { "bus_code": "KS602", "tracking": { "bus_code": "KS602", "live": { "latitude": 11.2059, "...": "..." } } },
+      { "bus_code": "ZZZ9", "error": { "code": "BUS_NOT_FOUND", "message": "Bus route not found on Chalo" } }
+    ]
+  }
+}
+```
+
+An invalid code returns `400 INVALID_BUS_CODE` naming the entry, and more than 20 returns `400 TOO_MANY_BUS_CODES`.
+
+#### `GET /api/v1/buses/stream?codes=KS602,DL1PC0001`
+One server-sent events connection for several buses. It emits `position` events (each includes `bus_code`) and `bus_error` events (`{"bus_code", "code", "message"}`). Each bus counts toward `STREAM_MAX_CLIENTS`; a stream that doesn't fit is rejected entirely (`503 STREAM_CAPACITY`) rather than half-admitted.
+
+#### `GET /api/v1/openapi.json`
+The OpenAPI 3.1 description of every `/api/v1` endpoint. Tests keep it in sync: a route or model field that isn't documented (or vice versa) fails the build.
 
 ### 3. Observability
 
@@ -409,6 +456,10 @@ If `BROWSER_PATH` is not explicitly set, Ethiyo checks:
 - **Symptom**: HTTP 504 Gateway Timeout with code `CHALO_TIMEOUT`.
 - **Solution**: Ensure internet access is available to `chalo.com`. Increase `BROWSER_TIMEOUT` in your `.env` (e.g., `BROWSER_TIMEOUT=25s`).
 
+### Chalo Is Down / `degraded: true` Responses
+- **Symptom**: Responses carry `"degraded": true`, the app shows "Chalo isn't responding", or `/health` reports `upstream.state: "open"`.
+- **Meaning**: Chalo has failed `UPSTREAM_BREAKER_THRESHOLD` times in a row, so Ethiyo is serving last known positions and probing for recovery every `UPSTREAM_BREAKER_COOLDOWN`. It recovers on its own once Chalo answers again; `ethiyo_upstream_circuit_open` in `/metrics` tracks it.
+
 ### Browser Concurrency Limit Exceeded
 - **Symptom**: HTTP 503 with code `BROWSER_BUSY`.
 - **Solution**: Increase `BROWSER_MAX_CONCURRENCY` in `.env` if your host machine has sufficient RAM/CPU.
@@ -460,13 +511,22 @@ Unit tests use `httptest` and in-memory mocks to isolate tests from live network
 
 ### End-to-End
 
-The E2E suite runs the real backend against `frontend/mock-chalo.cjs`. The mock reproduces Chalo's quirks: HTTP 202 for known *and* unknown buses, a bus that moves, and a route page that fires the scheduler XHR. The suite then drives headless Chromium through live data, the SSE stream, the heading arrow and trail, proximity, route discovery, error states and responsive layouts:
+The E2E suite runs the real backend against `frontend/mock-chalo.cjs`. The mock reproduces Chalo's quirks: HTTP 202 for known *and* unknown buses, a bus that drives a loop, a route page that fires the scheduler XHR, and an outage switch (`/__mock/fail?on=1`). The suite drives headless Chromium through:
+
+- live data, the SSE stream, the heading arrow and trail
+- proximity and the arrival alert (including a real browser notification)
+- My buses over one multi-bus stream
+- a simulated Chalo outage (degraded banner, stopped-reporting alert, header status) and its recovery
+- route discovery, error states and responsive layouts
+
+With `PWA_URL` set, it also checks the installable production build: the manifest, the service worker, that no live data is cached, and the offline shell.
 
 ```bash
 node frontend/mock-chalo.cjs &
-CHALO_BASE_URL=http://localhost:9099 STREAM_POLL_INTERVAL=2s LIVE_CACHE_TTL=1s go run ./cmd/server &
+CHALO_BASE_URL=http://localhost:9099 STREAM_POLL_INTERVAL=2s LIVE_CACHE_TTL=1s UPSTREAM_BREAKER_COOLDOWN=3s go run ./cmd/server &
 make frontend-dev &
-make e2e-test
+npm --prefix frontend run build && npm --prefix frontend run preview -- --port 4173 --strictPort &
+PWA_URL=http://localhost:4173 make e2e-test
 ```
 
 ---
@@ -483,13 +543,15 @@ Ethiyo/
 │       └── main.go          # Application entrypoint
 ├── frontend/                # Nordic Minimalist React 19 + TypeScript + Vite web application
 │   ├── src/                 # Components (Header, Map, Tracker, SearchBar, States)
-│   ├── public/              # Static branding and icons
+│   ├── public/              # Icons, PWA manifest and service worker (sw.js)
 │   ├── browser-verification-suite.cjs # Headless Chromium DevTools CDP test runner
 │   ├── mock-chalo.cjs       # Deterministic upstream test mock server for CI
 │   ├── package.json         # Frontend dependencies and test scripts
 │   └── vite.config.ts       # Vite configuration with proxy to Go backend
 ├── internal/
+│   ├── apidocs/             # Embedded OpenAPI 3.1 document and its drift tests
 │   ├── auth/                # Google OAuth2 and HMAC CSRF state validation
+│   ├── breaker/             # Circuit breaker for calls to Chalo
 │   ├── browser/             # Cross-platform browser locator and concurrency manager
 │   ├── cache/               # Generic TTL cache with request coalescing
 │   ├── chalo/               # Chalo client, scraper, regex patterns, and service
@@ -530,6 +592,8 @@ Ethiyo/
 - **Route Discovery Requires Browser**: The `/route` flow still needs the headless browser to intercept `scheduler_v4/.../routedetailslive`. If Chalo stops issuing that request, update the regex patterns in `internal/chalo/regex.go`.
 - **Per-Instance State**: The cache, position history and stream hub live in memory, so each replica has its own. Trails start empty after a restart and are not shared between instances.
 - **ETA Is Approximate**: The web app's ETA is straight-line distance divided by current speed. It ignores the road network, stops and traffic, and is labelled as approximate.
+- **No Per-Stop ETAs Yet**: Stop-level arrival times would need the stop list from Chalo's `routedetailslive` response. Its schema is undocumented and could not be inspected from the development environment, so it is not parsed yet rather than guessed at.
+- **Alerts Need an Open Page**: Arrival and disruption alerts are evaluated in the browser, so they only fire while the app is open (in a tab or as an installed app). Background push would need a push server.
 - **Headless Browser Overhead**: Headless browser automation requires approximately 50MB-100MB of RAM per active session. Ensure server sizing accounts for `BROWSER_MAX_CONCURRENCY`.
 
 ---
@@ -541,3 +605,8 @@ Ethiyo/
 - [x] Stream real-time bus location updates directly to clients (implemented with server-sent events).
 - [x] In-memory caching with request coalescing for live tracking and route discovery.
 - [ ] Add Dockerfile and multi-stage container build with bundled Chromium.
+- [ ] Per-stop ETAs from the `routedetailslive` stop list (needs real payload samples).
+- [ ] Web Push so alerts arrive when the app is closed.
+- [x] Saved buses with a multi-bus live stream, arrival and disruption alerts.
+- [x] Circuit breaker with last-known-position fallback when Chalo fails.
+- [x] OpenAPI 3.1 document, trail export (GeoJSON/GPX) and an installable PWA.
