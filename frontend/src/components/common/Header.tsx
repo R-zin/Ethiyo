@@ -17,6 +17,19 @@ export function Header({
   onInspectHealth,
 }: HeaderProps) {
   const isHealthy = health?.status === 'healthy'
+  const upstreamDown = isHealthy && !!health?.degraded
+  const statusLabel = healthLoading
+    ? 'Connecting...'
+    : !isHealthy
+    ? 'Service Down'
+    : upstreamDown
+    ? 'Chalo Degraded'
+    : 'API Online'
+  const statusTitle = !health
+    ? 'Checking backend...'
+    : upstreamDown
+    ? `Backend is up, but Chalo is not responding (circuit ${health.upstream?.state ?? 'open'}); showing last known positions`
+    : `Backend: ${health.status} (${health.latencyMs}ms)`
 
   return (
     <header className="sticky top-0 z-30 w-full border-b border-nordic-200/80 dark:border-nordic-800/80 bg-white/80 dark:bg-nordic-950/80 backdrop-blur-md">
@@ -46,17 +59,19 @@ export function Header({
           {/* Backend Status indicator */}
           <button
             onClick={onInspectHealth}
-            title={health ? `Backend: ${health.status} (${health.latencyMs}ms)` : 'Checking backend...'}
+            title={statusTitle}
+            data-testid="api-status"
+            data-state={healthLoading ? 'loading' : !isHealthy ? 'down' : upstreamDown ? 'degraded' : 'ok'}
             className="flex items-center gap-2 px-2.5 py-1.5 rounded-md border border-nordic-200 dark:border-nordic-800 hover:bg-nordic-50 dark:hover:bg-nordic-900 text-xs font-mono transition-colors text-nordic-600 dark:text-nordic-300"
             aria-label="View backend system status"
           >
             <span className="relative flex h-2 w-2">
-              {isHealthy && (
+              {isHealthy && !upstreamDown && (
                 <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-pine-400 opacity-75" />
               )}
               <span
                 className={`relative inline-flex rounded-full h-2 w-2 ${
-                  healthLoading
+                  healthLoading || upstreamDown
                     ? 'bg-amber-400'
                     : isHealthy
                     ? 'bg-pine-500'
@@ -65,7 +80,7 @@ export function Header({
               />
             </span>
             <span className="hidden sm:inline font-sans font-medium text-xs">
-              {healthLoading ? 'Connecting...' : isHealthy ? 'API Online' : 'Service Down'}
+              {statusLabel}
             </span>
             {health?.latencyMs !== undefined && (
               <span className="text-nordic-400 text-[11px] hidden md:inline">

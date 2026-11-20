@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { formatSpeed, formatCoordinates, formatRelativeTime } from './format'
+import { formatSpeed, formatCoordinates, formatRelativeTime, formatDateTime, toMillis } from './format'
 
 describe('format utilities', () => {
   it('formats speed values cleanly', () => {
@@ -19,5 +19,22 @@ describe('format utilities', () => {
     expect(formatRelativeTime(now - 2000)).toBe('Just now')
     expect(formatRelativeTime(now - 15000)).toBe('15s ago')
     expect(formatRelativeTime(now - 120000)).toBe('2m ago')
+  })
+
+  // The API sends RFC 3339 strings; the UI previously only handled epoch ms.
+  it('accepts RFC 3339 timestamps from the API', () => {
+    const iso = new Date(Date.now() - 90_000).toISOString()
+    expect(formatRelativeTime(iso)).toBe('1m ago')
+    expect(toMillis('2026-09-19T22:23:55+05:30')).toBe(Date.UTC(2026, 8, 19, 16, 53, 55))
+    expect(formatDateTime(iso)).not.toBe('—')
+  })
+
+  it('treats invalid or missing timestamps safely', () => {
+    expect(toMillis('garbage')).toBeUndefined()
+    expect(toMillis('')).toBeUndefined()
+    expect(formatRelativeTime('garbage')).toBe('Live now')
+    expect(formatDateTime(undefined)).toBe('—')
+    // A vehicle clock slightly ahead must not render a negative age.
+    expect(formatRelativeTime(Date.now() + 10_000)).toBe('Just now')
   })
 })

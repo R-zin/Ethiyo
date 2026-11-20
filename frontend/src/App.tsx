@@ -4,40 +4,44 @@ import { SearchBar } from './components/tracking/SearchBar'
 import { LiveTrackerCard } from './components/tracking/LiveTrackerCard'
 import { TransitMap } from './components/tracking/TransitMap'
 import { RouteDetailsTab } from './components/tracking/RouteDetailsTab'
+import { ProximityCard } from './components/tracking/ProximityCard'
+import { FavoritesPanel } from './components/tracking/FavoritesPanel'
+import { AlertsCard, AlertBanners } from './components/tracking/AlertsCard'
 import { EmptyState } from './components/states/EmptyState'
 import { ErrorState } from './components/states/ErrorState'
 import { SkeletonLoader } from './components/common/SkeletonLoader'
 import { TransitApi } from './services/api'
-import { BusTrackingInfo, BusRouteInfo, HealthStatus } from './types/transit'
+import { HealthStatus } from './types/transit'
 import { useTheme } from './hooks/useTheme'
-import { Map, Layers } from 'lucide-react'
+import { useBusTracker } from './hooks/useBusTracker'
+import { useGeolocation } from './hooks/useGeolocation'
+import { useFavorites } from './hooks/useFavorites'
+import { useFleet } from './hooks/useFleet'
+import { useAlerts } from './hooks/useAlerts'
+import { normalizeCode } from './utils/busCode'
+import { Map, Layers, Download } from 'lucide-react'
+
+function readCodeFromUrl(): string {
+  return normalizeCode(new URLSearchParams(window.location.search).get('code') || '')
+}
 
 export function App() {
   const { theme, toggleTheme } = useTheme()
-
-  // Routing and tracking states
-  const [activeCode, setActiveCode] = useState<string>(() => {
-    const params = new URLSearchParams(window.location.search)
-    return params.get('code') || ''
-  })
-  const [trackingData, setTrackingData] = useState<BusTrackingInfo | null>(null)
-  const [routeData, setRouteData] = useState<BusRouteInfo | null>(null)
-  const [isLoading, setIsLoading] = useState(false)
-  const [isRefreshing, setIsRefreshing] = useState(false)
-  const [error, setError] = useState<{ code: string; message: string } | null>(null)
-  const [lastUpdated, setLastUpdated] = useState<number>(Date.now())
+  const [activeCode, setActiveCode] = useState<string>(readCodeFromUrl)
   const [activeTab, setActiveTab] = useState<'map' | 'route'>('map')
+  const tracker = useBusTracker(activeCode)
+  const geo = useGeolocation()
+  const favorites = useFavorites()
+  const fleet = useFleet(favorites.favorites)
 
-  // System Health state
+  // System health
   const [health, setHealth] = useState<HealthStatus | null>(null)
   const [healthLoading, setHealthLoading] = useState(true)
 
-  // Fetch health on load
   const checkHealth = useCallback(async () => {
     setHealthLoading(true)
     try {
-      const res = await TransitApi.checkHealth()
-      setHealth(res)
+      setHealth(await TransitApi.checkHealth())
     } catch {
       setHealth({ message: 'offline', status: 'error', browser: false, latencyMs: 0 })
     } finally {
@@ -51,64 +55,34 @@ export function App() {
     return () => clearInterval(interval)
   }, [checkHealth])
 
-  // Track bus function
-  const handleTrackBus = useCallback(
-    async (busCode: string, isSilentRefresh = false) => {
-      const clean = busCode.trim().toUpperCase()
+  const { retry } = tracker
+  const handleSearch = useCallback(
+    (busCode: string) => {
+      const clean = normalizeCode(busCode)
       if (!clean) return
-
-      if (isSilentRefresh) {
-        setIsRefreshing(true)
+      const url = new URL(window.location.href)
+      url.searchParams.set('code', clean)
+      window.history.replaceState({}, '', url.toString())
+      if (clean === activeCode) {
+        retry() // re-searching the same bus means "try again"
       } else {
-        setIsLoading(true)
-        setError(null)
-      }
-
-      // Update URL query param quietly
-      const newUrl = new URL(window.location.href)
-      newUrl.searchParams.set('code', clean)
-      window.history.replaceState({}, '', newUrl.toString())
-      setActiveCode(clean)
-
-      try {
-        // Fetch live position & tracking info
-        const tracking = await TransitApi.trackBus(clean)
-        setTrackingData(tracking)
-        setLastUpdated(Date.now())
-        setError(null)
-
-        // Asynchronously prefetch route scheduler endpoints if not loaded
-        TransitApi.getRoute(clean)
-          .then(res => setRouteData(res))
-          .catch(() => {
-            // Non-fatal if route schedule discovery takes longer
-          })
-      } catch (err: any) {
-        setError({
-          code: err.code || 'TRACKING_FAILED',
-          message: err.message || 'Unable to track bus location',
-        })
-        if (!isSilentRefresh) {
-          setTrackingData(null)
-        }
-      } finally {
-        setIsLoading(false)
-        setIsRefreshing(false)
+        setActiveCode(clean)
       }
     },
-    []
+    [activeCode, retry]
   )
 
-  // Initial load if query param was present
-  useEffect(() => {
-    if (activeCode) {
-      handleTrackBus(activeCode)
-    }
-  }, [])
+  const { tracking, error, isLoading } = tracker
+  const live = tracking?.live
+  const alerts = useAlerts({
+    busCode: tracking?.bus_code ?? '',
+    live,
+    degraded: tracking?.degraded,
+    user: geo.position,
+  })
 
   return (
     <div className="min-h-full flex flex-col bg-nordic-50 dark:bg-nordic-950 text-nordic-900 dark:text-nordic-100 selection:bg-frost-500 selection:text-white">
-      {/* Top Navbar */}
       <Header
         theme={theme}
         onToggleTheme={toggleTheme}
@@ -117,37 +91,66 @@ export function App() {
         onInspectHealth={checkHealth}
       />
 
-      {/* Main Container */}
       <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8 space-y-6">
-        {/* Search & Selector */}
         <section aria-label="Route Search" className="max-w-2xl mx-auto w-full">
-          <SearchBar
-            onSearch={code => handleTrackBus(code)}
-            isLoading={isLoading}
-            initialCode={activeCode}
-          />
+          <SearchBar onSearch={handleSearch} isLoading={isLoading} initialCode={activeCode} />
         </section>
 
-        {/* Content Area */}
+        <FavoritesPanel
+          favorites={favorites.favorites}
+          entries={fleet.entries}
+          mode={fleet.mode}
+          activeCode={tracking?.bus_code}
+          onSelect={handleSearch}
+          onRemove={favorites.remove}
+        />
+
+        <AlertBanners alerts={alerts.alerts} onDismiss={alerts.dismiss} />
+
         <div className="pt-2">
-          {isLoading && !trackingData ? (
+          {isLoading && !tracking ? (
             <SkeletonLoader />
-          ) : error && !trackingData ? (
+          ) : error && !tracking ? (
             <ErrorState
               code={error.code}
               message={error.message}
               busCode={activeCode}
-              onRetry={() => handleTrackBus(activeCode)}
-              onTryAlternative={alt => handleTrackBus(alt)}
+              onRetry={retry}
+              onTryAlternative={handleSearch}
             />
-          ) : trackingData ? (
+          ) : tracking ? (
             <div className="space-y-6">
-              {/* Primary Live Telemetry Card */}
               <LiveTrackerCard
-                data={trackingData}
-                onRefresh={() => handleTrackBus(activeCode, true)}
-                isRefreshing={isRefreshing}
-                lastUpdated={lastUpdated}
+                data={tracking}
+                mode={tracker.mode}
+                paused={tracker.paused}
+                onTogglePaused={() => tracker.setPaused(p => !p)}
+                onRefresh={tracker.refresh}
+                isRefreshing={tracker.isRefreshing}
+                warning={tracker.warning}
+                distanceM={tracker.distanceM}
+                trailPoints={tracker.trail.length}
+                isFavorite={favorites.isFavorite(tracking.bus_code)}
+                favoriteDisabled={favorites.isFull}
+                onToggleFavorite={() => favorites.toggle(tracking.bus_code)}
+              />
+
+              <ProximityCard
+                bus={live ? { latitude: live.latitude, longitude: live.longitude, speed: live.speed } : undefined}
+                status={geo.status}
+                position={geo.position}
+                onStart={geo.start}
+                onStop={geo.stop}
+              />
+
+              <AlertsCard
+                busCode={tracking.bus_code}
+                config={alerts.config}
+                permission={alerts.permission}
+                locationStatus={geo.status}
+                onApproachChange={alerts.setApproachMinutes}
+                onOfflineChange={alerts.setOffline}
+                onEnableLocation={geo.start}
               />
 
               {/* View Switcher Tabs (Map View vs Route Spec) */}
@@ -192,12 +195,36 @@ export function App() {
                   </button>
                 </div>
 
-                <div className="text-xs text-nordic-400 hidden sm:block font-mono">
-                  Coordinates: {trackingData.position?.latitude ? 'Live GPS' : 'Static Fallback'}
+                <div className="flex items-center gap-3 text-xs text-nordic-400 font-mono">
+                  {tracker.trail.length > 0 && (
+                    <span className="flex items-center gap-1.5" data-testid="trail-export">
+                      <Download className="w-3.5 h-3.5" />
+                      <span className="hidden sm:inline">Trail:</span>
+                      <a
+                        href={TransitApi.trailExportUrl(tracking.bus_code, 'geojson')}
+                        download
+                        className="text-frost-600 dark:text-frost-400 hover:underline"
+                        aria-label={`Download ${tracking.bus_code} trail as GeoJSON`}
+                      >
+                        GeoJSON
+                      </a>
+                      <span aria-hidden="true">·</span>
+                      <a
+                        href={TransitApi.trailExportUrl(tracking.bus_code, 'gpx')}
+                        download
+                        className="text-frost-600 dark:text-frost-400 hover:underline"
+                        aria-label={`Download ${tracking.bus_code} trail as GPX`}
+                      >
+                        GPX
+                      </a>
+                    </span>
+                  )}
+                  <span className="hidden sm:inline">
+                    {!live ? 'No GPS fix' : tracking.degraded ? 'Last known' : live.stale ? 'Stale position' : 'Live GPS'}
+                  </span>
                 </div>
               </div>
 
-              {/* Active Tab Panel */}
               <div
                 role="tabpanel"
                 id={activeTab === 'map' ? 'panel-map' : 'panel-route'}
@@ -205,28 +232,32 @@ export function App() {
               >
                 {activeTab === 'map' ? (
                   <TransitMap
-                    latitude={trackingData.position?.latitude}
-                    longitude={trackingData.position?.longitude}
-                    busCode={trackingData.bus_code}
-                    routeName={trackingData.position?.route_name}
-                    speedKmh={trackingData.position?.speed_kmh}
+                    latitude={live?.latitude}
+                    longitude={live?.longitude}
+                    busCode={tracking.bus_code}
+                    routeName={live?.route_name}
+                    speedKmh={live?.speed}
+                    heading={live?.heading}
+                    stale={live?.stale}
+                    trail={tracker.trail}
+                    userPosition={geo.position}
                   />
                 ) : (
                   <RouteDetailsTab
-                    routeData={routeData}
-                    isLoading={!routeData && isLoading}
-                    busCode={trackingData.bus_code}
+                    routeData={tracker.route}
+                    isLoading={tracker.routeLoading}
+                    error={tracker.routeError}
+                    busCode={tracking.bus_code}
                   />
                 )}
               </div>
             </div>
           ) : (
-            <EmptyState onSelectSample={code => handleTrackBus(code)} />
+            <EmptyState onSelectSample={handleSearch} />
           )}
         </div>
       </main>
 
-      {/* Nordic Minimalist Footer */}
       <footer className="border-t border-nordic-200/80 dark:border-nordic-800/80 py-6 text-xs text-nordic-400 bg-white/50 dark:bg-nordic-950/50">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-3">
           <p className="flex items-center gap-1.5 font-mono">
@@ -234,12 +265,12 @@ export function App() {
             <span>·</span>
             <span>Nordic UI Design System</span>
           </p>
-          <div className="flex items-center gap-4 text-nordic-500">
+          <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-1 text-nordic-500">
             <span>REST API v1</span>
             <span>·</span>
-            <span>Chromium Headless Interception</span>
+            <span>Live SSE Streaming</span>
             <span>·</span>
-            <span>WCAG 2.1 AA Compliant</span>
+            <span>Chromium Headless Interception</span>
           </div>
         </div>
       </footer>

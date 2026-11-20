@@ -1,7 +1,9 @@
 package middleware
 
 import (
+	"math"
 	"net/http"
+	"strconv"
 	"sync"
 	"time"
 
@@ -55,11 +57,22 @@ func (rl *RateLimiter) Stop() {
 	})
 }
 
-// Middleware returns a Gin HandlerFunc applying rate limiting.
-func (rl *RateLimiter) Middleware() gin.HandlerFunc {
+// Middleware returns a Gin HandlerFunc applying rate limiting. Requests to
+// exemptPaths (e.g. load-balancer health probes and metrics scrapes) are never
+// limited, so monitoring keeps working while clients are being throttled.
+func (rl *RateLimiter) Middleware(exemptPaths ...string) gin.HandlerFunc {
+	exempt := make(map[string]bool, len(exemptPaths))
+	for _, p := range exemptPaths {
+		exempt[p] = true
+	}
 	return func(c *gin.Context) {
-		ip := c.ClientIP()
-		if !rl.allow(ip) {
+		if exempt[c.Request.URL.Path] {
+			c.Next()
+			return
+		}
+		ok, wait := rl.take(c.ClientIP())
+		if !ok {
+			c.Header("Retry-After", strconv.Itoa(retryAfterSeconds(wait)))
 			c.AbortWithStatusJSON(http.StatusTooManyRequests, models.NewErrorResponse(
 				"RATE_LIMIT_EXCEEDED",
 				"Too many requests. Please try again later.",
@@ -70,21 +83,37 @@ func (rl *RateLimiter) Middleware() gin.HandlerFunc {
 	}
 }
 
+func retryAfterSeconds(wait time.Duration) int {
+	secs := int(math.Ceil(wait.Seconds()))
+	if secs < 1 {
+		secs = 1
+	}
+	return secs
+}
+
 func (rl *RateLimiter) allow(ip string) bool {
+	ok, _ := rl.take(ip)
+	return ok
+}
+
+// take consumes a token for ip. When the request is rejected it also returns
+// how long until the next token becomes available.
+func (rl *RateLimiter) take(ip string) (bool, time.Duration) {
 	rl.mu.Lock()
 	defer rl.mu.Unlock()
 
 	now := time.Now()
 	bucket, exists := rl.clients[ip]
 	if !exists {
-		if len(rl.clients) >= rl.maxClients {
-			return false
+		if len(rl.clients) >= rl.maxClients && !rl.evictRefilledLocked(now) {
+			// Every tracked client is actively being limited: fail closed.
+			return false, time.Second
 		}
 		rl.clients[ip] = &clientBucket{
 			tokens:    rl.burst - 1,
 			lastCheck: now,
 		}
-		return true
+		return true, 0
 	}
 
 	// Refill tokens based on elapsed time
@@ -97,10 +126,27 @@ func (rl *RateLimiter) allow(ip string) bool {
 
 	if bucket.tokens >= 1.0 {
 		bucket.tokens -= 1.0
-		return true
+		return true, 0
 	}
 
-	return false
+	wait := time.Duration((1.0 - bucket.tokens) / rl.rate * float64(time.Second))
+	return false, wait
+}
+
+// evictRefilledLocked drops buckets that have refilled to full capacity.
+// Such a bucket is indistinguishable from a brand-new one, so eviction is
+// lossless; it lets new clients in when the table is full of idle entries
+// instead of rejecting them until the periodic sweep runs. Reports whether
+// anything was evicted. Callers must hold rl.mu.
+func (rl *RateLimiter) evictRefilledLocked(now time.Time) bool {
+	evicted := false
+	for ip, b := range rl.clients {
+		if b.tokens+now.Sub(b.lastCheck).Seconds()*rl.rate >= rl.burst {
+			delete(rl.clients, ip)
+			evicted = true
+		}
+	}
+	return evicted
 }
 
 // cleanup evicts buckets that have been idle longer than ttl.

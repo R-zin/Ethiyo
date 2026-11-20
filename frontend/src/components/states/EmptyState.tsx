@@ -25,7 +25,7 @@ export function EmptyState({ onSelectSample }: EmptyStateProps) {
         </span>
         <div className="flex flex-wrap items-center justify-center gap-2">
           {[
-            { code: 'KS602', desc: 'Bangalore Live GPS' },
+            { code: 'KS602', desc: 'KSRTC Kerala' },
             { code: 'DL1PC0001', desc: 'Delhi Intercept' },
             { code: 'route_500', desc: 'Outer Ring Road' },
           ].map(sample => (
@@ -51,7 +51,7 @@ export function EmptyState({ onSelectSample }: EmptyStateProps) {
               Direct Vehicle API
             </h3>
             <p className="text-[11px] text-nordic-500 mt-0.5">
-              Instant sub-second GPS coordinate snapshots directly from transit sensors.
+              Live positions pushed over server-sent events, with heading and a breadcrumb trail.
             </p>
           </div>
         </div>

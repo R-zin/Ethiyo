@@ -64,14 +64,15 @@ func TestDiscoverRoutesHitsConfiguredBaseURL(t *testing.T) {
 	defer cleanup()
 
 	// Discovered URLs point at the test server (not chalo.com), so a match
-	// proves discovery honored the configured base URL and that the regexes
-	// now match scheme-less URLs — required when CHALO_BASE_URL is not
-	// https://chalo.com (staging proxies, local dev, tests).
+	// proves discovery honored the configured base URL — required when
+	// CHALO_BASE_URL is not https://chalo.com (staging proxies, local dev,
+	// tests). The legacy track URL is optional: discovery completes on the
+	// route URL, so trackURL is only checked when it was captured.
 	trackURL, routeURL, err := scraper.DiscoverRoutes(context.Background(), "X")
 	if err != nil {
 		t.Fatalf("DiscoverRoutes: %v", err)
 	}
-	if !IsTrackURL(trackURL) {
+	if trackURL != "" && !IsTrackURL(trackURL) {
 		t.Errorf("discovered trackURL %q does not match IsTrackURL", trackURL)
 	}
 	if !IsRouteURL(routeURL) {
@@ -162,5 +163,67 @@ func TestRunWithTimeoutGuardsBrowser(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatalf("expected error on canceled context")
+	}
+}
+
+// newRouteOnlyFixture mimics Chalo's current public route page, which emits
+// ONLY the scheduler routedetailslive XHR (the legacy route-live-info XHR is
+// gone). Live tracking comes from the deterministic chatbot/raw endpoint.
+func newRouteOnlyFixture(t *testing.T) (*Scraper, string, func()) {
+	t.Helper()
+	browserPath := requireBrowser(t)
+
+	mux := http.NewServeMux()
+	server := httptest.NewServer(mux)
+	routeURL := server.URL + "/app/api/scheduler_v4/v4/testcity/routedetailslive?routeId=X"
+
+	mux.HandleFunc("/app/public-route/", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html")
+		fmt.Fprintf(w, `<html><body><script>fetch(%q).catch(function(){});</script>ok</body></html>`, routeURL)
+	})
+	mux.HandleFunc("/app/api/", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		fmt.Fprint(w, `{}`)
+	})
+
+	mgr := browser.NewManager(browserPath, true, 10*time.Second, 2)
+	return NewScraper(mgr, server.URL, 10*time.Second), routeURL, server.Close
+}
+
+// TestDiscoverRoutesWithoutLegacyTrackXHR is a regression test: discovery
+// used to require the legacy route-live-info XHR, so against Chalo's current
+// pages every /route call burned the full browser timeout and then failed.
+func TestDiscoverRoutesWithoutLegacyTrackXHR(t *testing.T) {
+	scraper, wantRoute, cleanup := newRouteOnlyFixture(t)
+	defer cleanup()
+
+	start := time.Now()
+	_, routeURL, err := scraper.DiscoverRoutes(context.Background(), "X")
+	if err != nil {
+		t.Fatalf("DiscoverRoutes: %v", err)
+	}
+	if routeURL != wantRoute {
+		t.Errorf("routeURL = %q, want %q", routeURL, wantRoute)
+	}
+	if elapsed := time.Since(start); elapsed > 8*time.Second {
+		t.Errorf("discovery should finish as soon as the route XHR fires; took %v", elapsed)
+	}
+}
+
+func TestServiceGetBusRouteUsesDeterministicTrackingURL(t *testing.T) {
+	scraper, wantRoute, cleanup := newRouteOnlyFixture(t)
+	defer cleanup()
+
+	client := NewClient(scraper.baseURL, 5*time.Second)
+	svc := NewService(client, scraper)
+	info, err := svc.GetBusRoute(context.Background(), "X")
+	if err != nil {
+		t.Fatalf("GetBusRoute: %v", err)
+	}
+	if info.RouteURL != wantRoute {
+		t.Errorf("RouteURL = %q, want %q", info.RouteURL, wantRoute)
+	}
+	if info.TrackingURL != client.LiveTrackingURL("X") {
+		t.Errorf("TrackingURL = %q, want deterministic %q", info.TrackingURL, client.LiveTrackingURL("X"))
 	}
 }

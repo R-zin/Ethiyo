@@ -357,3 +357,65 @@ func TestRateLimiterMaxCapacity(t *testing.T) {
 		t.Errorf("expected 4th client to be rejected when capacity is full")
 	}
 }
+
+func TestRateLimiterSetsRetryAfter(t *testing.T) {
+	limiter := NewRateLimiter(0.5, 1) // one token every 2s
+	defer limiter.Stop()
+	r := gin.New()
+	r.Use(limiter.Middleware())
+	r.GET("/x", func(c *gin.Context) { c.Status(http.StatusOK) })
+
+	r.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/x", nil))
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/x", nil))
+	if w.Code != http.StatusTooManyRequests {
+		t.Fatalf("status = %d, want 429", w.Code)
+	}
+	if got := w.Header().Get("Retry-After"); got != "2" {
+		t.Errorf("Retry-After = %q, want \"2\" (seconds until the next token)", got)
+	}
+}
+
+func TestRateLimiterExemptPaths(t *testing.T) {
+	limiter := NewRateLimiter(0.0001, 1)
+	defer limiter.Stop()
+	r := gin.New()
+	r.Use(limiter.Middleware("/health"))
+	r.GET("/health", func(c *gin.Context) { c.Status(http.StatusOK) })
+	r.GET("/x", func(c *gin.Context) { c.Status(http.StatusOK) })
+
+	for i := 0; i < 5; i++ {
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/health", nil))
+		if w.Code != http.StatusOK {
+			t.Fatalf("health probe %d limited: %d", i, w.Code)
+		}
+	}
+	// Exempt traffic must not consume the client's budget.
+	w := httptest.NewRecorder()
+	r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/x", nil))
+	if w.Code != http.StatusOK {
+		t.Errorf("first non-exempt request = %d, want 200", w.Code)
+	}
+}
+
+// TestRateLimiterFullTableAdmitsNewClientsWhenIdleBucketsExist is a
+// regression test: once maxClients was reached, every new client was rejected
+// until the periodic sweep, even if the table held only idle, fully refilled
+// buckets.
+func TestRateLimiterFullTableAdmitsNewClientsWhenIdleBucketsExist(t *testing.T) {
+	limiter := NewRateLimiter(1000, 1) // refills to full within 1ms
+	defer limiter.Stop()
+	limiter.maxClients = 2
+
+	limiter.allow("1.1.1.1")
+	limiter.allow("2.2.2.2")
+	time.Sleep(5 * time.Millisecond) // both buckets fully refilled (idle)
+
+	if !limiter.allow("3.3.3.3") {
+		t.Fatal("new client rejected although idle buckets could be evicted losslessly")
+	}
+	if len(limiter.clients) > 2 {
+		t.Errorf("table grew past maxClients: %d", len(limiter.clients))
+	}
+}

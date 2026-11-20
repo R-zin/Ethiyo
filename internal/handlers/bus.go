@@ -83,6 +83,38 @@ func (h *BusHandler) GetURL(c *gin.Context) {
 	}))
 }
 
+// History returns the recent breadcrumb trail of a bus, as the JSON envelope
+// (default) or as a downloadable GeoJSON / GPX file (?format=geojson|gpx).
+// GET /api/v1/bus/:buscode/history
+func (h *BusHandler) History(c *gin.Context) {
+	validCode, err := models.ValidateBusCode(c.Param("buscode"))
+	if err != nil {
+		HandleError(c, err)
+		return
+	}
+
+	format := c.DefaultQuery("format", "json")
+	if format != "json" && format != "geojson" && format != "gpx" {
+		HandleError(c, errInvalidFormat)
+		return
+	}
+
+	history, err := h.service.GetBusHistory(c.Request.Context(), validCode)
+	if err != nil {
+		HandleError(c, err)
+		return
+	}
+
+	switch format {
+	case "geojson":
+		writeDownload(c, "application/geo+json", validCode+"-trail.geojson", renderGeoJSON(history))
+	case "gpx":
+		writeDownload(c, "application/gpx+xml", validCode+"-trail.gpx", renderGPX(history))
+	default:
+		c.JSON(http.StatusOK, models.NewSuccessResponse(history))
+	}
+}
+
 // --- Legacy Backward-Compatible Endpoints ---
 
 // LegacyTrackRoute handles the deprecated /trackroute endpoint.
